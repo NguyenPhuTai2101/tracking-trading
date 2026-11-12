@@ -125,6 +125,11 @@ async function fetchSystemStatus() {
 // ==================== MARKET MODE TOGGLE (SPOT vs FUTURES) ====================
 function setMarketMode(mode, saveConfig = true) {
   state.marketMode = mode.toUpperCase();
+  allSymbols = [];
+  const mapped = toMarketSymbol(state.symbol);
+  if (mapped !== state.symbol) {
+    selectSymbol(mapped);   // also refreshes chart, orders and history for the new symbol
+  }
 
   const spotBtn = document.getElementById("mode-btn-spot");
   const futuresBtn = document.getElementById("mode-btn-futures");
@@ -202,7 +207,19 @@ function setBotLeverage(lev) {
   if (selectedBotMarket === "SPOT") return;
   botLeverage = lev;
   document.getElementById("leverage-display-val").textContent = `${lev}x`;
+  highlightLeverage(lev);
   markBotDirty();
+}
+
+function highlightLeverage(lev) {
+  document.querySelectorAll(".lev-btn").forEach(el => el.classList.toggle("selected", Number(el.dataset.lev) === Number(lev)));
+}
+
+function setBotSaveStatus(message, tone = "info") {
+  const el = document.getElementById("bot-save-status");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `text-xs mt-2 min-h-[1rem] ${tone === "error" ? "text-red-400" : tone === "ok" ? "text-emerald-400" : "text-gray-400"}`;
 }
 
 function markBotDirty() {
@@ -291,7 +308,7 @@ function applyBotConfig(bot, draft = false) {
   document.getElementById("leverage-display-val").textContent = `${bot.leverage}x`;
   document.getElementById("max-pos-display").textContent = `${bot.max_positions} lệnh`;
   document.querySelectorAll(".strategy-card").forEach(el => el.classList.toggle("selected", el.id === `strat-${bot.strategy}`));
-  document.querySelectorAll(".lev-btn").forEach(el => el.classList.toggle("selected", Number(el.dataset.lev) === bot.leverage));
+  highlightLeverage(bot.leverage);
   document.getElementById("bot-config-status").textContent = draft ? `Bot ${selectedBotMarket} có thay đổi chưa lưu.` : `Cấu hình riêng của bot ${selectedBotMarket} đã lưu trên máy chủ.`;
   botConfigDirty = draft;
   loadBotSymbols();
@@ -417,6 +434,11 @@ async function fetchKlinesAndSignals() {
     if (controller.signal.aborted || symbol !== state.symbol || interval !== state.interval || marketMode !== state.marketMode) return;
     if (!data.candles?.length) throw new Error("Chưa lấy được nến cho mã này trên thị trường đã chọn.");
     if (!data.signals) throw new Error("API chưa trả tín hiệu phân tích. Cần khởi động lại backend để nạp bản cập nhật.");
+    // The ticker strip only covers a few coins; the latest candle prices every symbol.
+    const last = data.candles[data.candles.length - 1].close;
+    document.getElementById("current-price").textContent = "$" + (last > 10
+      ? last.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : String(last));
     renderSignals(data.signals);
     try {
       updateChartData(data.candles);
@@ -638,8 +660,20 @@ function renderCoinList(symbols, searchInput = "") {
     .join("");
 }
 
+// Binance Futures lists low-priced coins per 1000 units (PEPEUSDT on Spot = 1000PEPEUSDT on Futures).
+const FUTURES_1000_COINS = ["PEPE", "SHIB", "FLOKI", "BONK", "SATS", "RATS", "LUNC", "XEC", "CAT", "CHEEMS", "WHY", "X", "MOG"];
+
+function toMarketSymbol(sym, market = state.marketMode) {
+  const upper = sym.toUpperCase();
+  const base = upper.replace(/USDT$/, "").replace(/^1000/, "");
+  if (!FUTURES_1000_COINS.includes(base)) return upper;
+  const futures = `1000${base}USDT`, spot = `${base}USDT`;
+  if (market === "FUTURES") return (!allSymbols.length || allSymbols.includes(futures)) ? futures : upper;
+  return (!allSymbols.length || allSymbols.includes(spot)) ? spot : upper;
+}
+
 function selectSymbol(sym) {
-  state.symbol = sym.toUpperCase();
+  state.symbol = toMarketSymbol(sym);
   const base = state.symbol.replace("USDT", "");
   
   const symLabel = document.getElementById("selected-coin-symbol");
@@ -647,9 +681,9 @@ function selectSymbol(sym) {
   const icon = document.getElementById("selected-coin-icon");
   if (icon) icon.textContent = base.slice(0, 1);
 
-  // Update active pill
+  // Update active pill (pills are labelled with the Spot symbol)
   document.querySelectorAll(".coin-pill").forEach((pill) => {
-    if (pill.getAttribute("data-sym") === state.symbol) {
+    if (toMarketSymbol(pill.getAttribute("data-sym")) === state.symbol) {
       pill.className = "coin-pill active px-2.5 py-1 rounded-lg bg-[#232a3d] text-yellow-400 font-bold font-mono";
     } else {
       pill.className = "coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono";
@@ -1051,13 +1085,14 @@ function selectStrategy(stratName) {
 async function saveBotConfig() {
   if (!botConfig || botSaveInFlight) return;
   if (state.isBotRunning) {
-    alert("Tạm dừng mở lệnh mới trước khi lưu cấu hình.");
+    setBotSaveStatus(`Bot ${selectedBotMarket} đang chạy. Bấm DỪNG rồi mới lưu được cấu hình.`, "error");
     return;
   }
   const market = selectedBotMarket;
   const payload = readBotDraft();
   for (const key of ["trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt"]) payload[key] = Number(payload[key]);
   botSaveInFlight = true;
+  setBotSaveStatus("Đang lưu...");
   document.getElementById("bot-settings-fields").disabled = true;
   try {
     const res = await fetch(`/api/bot/config?market=${market}`, {
@@ -1069,9 +1104,11 @@ async function saveBotConfig() {
     delete botDrafts[market];
     applyBotConfig(data.config);
     renderBotOverview();
+    setBotSaveStatus(`Đã lưu cấu hình Bot ${market} (${data.config.leverage}x, khung ${data.config.interval}).`, "ok");
     await fetchBotStatus();
   } catch (err) {
     document.getElementById("bot-config-status").textContent = err.message;
+    setBotSaveStatus("Không lưu được: " + err.message, "error");
   } finally {
     botSaveInFlight = false;
     document.getElementById("bot-settings-fields").disabled = false;

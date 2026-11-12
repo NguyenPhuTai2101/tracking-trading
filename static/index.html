@@ -451,7 +451,7 @@
             <div class="grid grid-cols-5 gap-1.5 text-xs">
               <button type="button" onclick="setBotLeverage(2)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="2">2x</button>
               <button type="button" onclick="setBotLeverage(5)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="5">5x</button>
-              <button type="button" onclick="setBotLeverage(10)" class="lev-btn py-1 rounded-lg bg-purple-600/30 border border-purple-400 text-purple-300 font-mono font-bold" data-lev="10">10x</button>
+              <button type="button" onclick="setBotLeverage(10)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="10">10x</button>
               <button type="button" onclick="setBotLeverage(20)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="20">20x</button>
               <button type="button" onclick="setBotLeverage(50)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="50">50x</button>
             </div>
@@ -509,10 +509,11 @@
               <input id="bot-risk-budget" type="number" min="0.01" step="0.1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
             </label>
           </div>
-          <button onclick="saveBotConfig()" class="w-full mt-3 py-2 rounded-xl bg-[#232a3d] hover:bg-[#2e374f] text-white text-xs font-bold transition-colors flex items-center justify-center space-x-2">
+          <button id="bot-save-btn" type="button" onclick="saveBotConfig()" class="w-full mt-3 py-2 rounded-xl bg-[#232a3d] hover:bg-[#2e374f] text-white text-xs font-bold transition-colors flex items-center justify-center space-x-2">
             <i class="fa-solid fa-floppy-disk text-yellow-400"></i>
             <span>Lưu cấu hình <span class="selected-bot-label">Bot FUTURES</span></span>
           </button>
+          <p id="bot-save-status" class="text-xs mt-2 min-h-[1rem]" role="status"></p>
           </fieldset>
 
           <!-- Live Bot Terminal Console -->

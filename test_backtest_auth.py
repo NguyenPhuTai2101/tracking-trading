@@ -174,6 +174,20 @@ class LoginTests(unittest.TestCase):
         self.login()
         response = self.client.post("/api/bot/stop?market=FUTURES", headers={"Origin": "https://evil.example"})
         self.assertEqual(response.status_code, 403)
+        response = self.client.post("/api/bot/stop?market=FUTURES", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_same_origin_write_allowed_behind_proxy(self):
+        # Railway's proxy may hand the app an internal Host; the browser's own label decides.
+        self.login()
+        engine = main.bot_manager.engines["FUTURES"]
+        with patch.object(engine, "stop", return_value={"success": True}):
+            response = self.client.post("/api/bot/stop?market=FUTURES", headers={
+                "Origin": "https://my-app.up.railway.app", "Host": "10.0.0.5:8080", "Sec-Fetch-Site": "same-origin"})
+            self.assertEqual(response.status_code, 200)
+            response = self.client.post("/api/bot/stop?market=FUTURES", headers={
+                "Origin": "https://my-app.up.railway.app", "X-Forwarded-Host": "my-app.up.railway.app"})
+            self.assertEqual(response.status_code, 200)
 
     def test_public_deploy_without_credentials_is_locked(self):
         with patch.object(auth, "settings", auth.AuthConfig(required=True)):

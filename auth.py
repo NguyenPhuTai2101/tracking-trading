@@ -132,8 +132,14 @@ def is_https(request) -> bool:
 
 def same_origin(request) -> bool:
     """Reject cross-site writes. SameSite=Strict already blocks the cookie; this is defence in depth."""
+    # Browsers label every request with Sec-Fetch-Site. Prefer it: behind Railway's proxy the
+    # Host header may not be the public domain, so comparing Origin to Host can misfire.
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site:
+        return fetch_site in ("same-origin", "none")
     origin = request.headers.get("origin")
-    if not origin:
-        return True
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
-    return origin.split("://", 1)[-1] == host
+    if not origin or origin == "null":
+        return origin is None
+    origin_host = origin.split("://", 1)[-1].lower()
+    hosts = {request.headers.get(h, "").split(",")[0].strip().lower() for h in ("x-forwarded-host", "host")}
+    return origin_host in hosts
