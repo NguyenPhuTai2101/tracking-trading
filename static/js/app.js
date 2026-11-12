@@ -737,6 +737,19 @@ function renderSelectedBot(bot) {
       bot.monitoring ? "Giám sát vị thế đang hoạt động." : "Giám sát vị thế đang dừng."
     );
 
+    // Exchange positions with no bot record (e.g. manual trades). Closing them is opt-in per symbol.
+    untrackedPositions = Object.entries(bot.position_mismatches || {})
+      .filter(([sym, d]) => sym !== "account" && !d.error && !d.bot_quantity && d.exchange_quantity)
+      .map(([sym, d]) => ({ symbol: sym, quantity: d.exchange_quantity }));
+    const untrackedBtn = document.getElementById("btn-close-untracked");
+    if (untrackedBtn) {
+      const show = bot.market_type === "FUTURES" && untrackedPositions.length > 0;
+      untrackedBtn.classList.toggle("hidden", !show);
+      untrackedBtn.textContent = show ? `Đóng vị thế ngoài bot: ${untrackedPositions.map(p => p.symbol).join(", ")}` : "";
+      untrackedBtn.disabled = bot.is_running;
+      untrackedBtn.title = bot.is_running ? "Dừng bot trước khi đóng" : "";
+    }
+
     // Power Button UI
     const toggleBtn = document.getElementById("bot-toggle-btn");
     const toggleText = document.getElementById("bot-toggle-text");
@@ -1055,6 +1068,32 @@ async function closeAllPositions() {
       alert(data.message);
     } else {
       alert("Lỗi khi đóng tất cả: " + (data.detail || data.error));
+    }
+    fetchBotStatus();
+    fetchAccountBalances();
+  } catch (err) {
+    alert("Lỗi kết nối: " + err);
+  }
+}
+
+let untrackedPositions = [];
+
+async function closeUntrackedPositions() {
+  const market = selectedBotMarket;
+  if (market !== "FUTURES" || !untrackedPositions.length) return;
+  const detail = untrackedPositions.map(p => `${p.symbol}: ${p.quantity}`).join("\n");
+  if (!confirm(`Các vị thế sau KHÔNG do bot mở (có thể là lệnh tay của bạn):\n${detail}\n\nĐóng bằng lệnh MARKET reduce-only?`)) return;
+  try {
+    const res = await fetch(`/api/bot/close-untracked?market=${market}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols: untrackedPositions.map(p => p.symbol) }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert("Lỗi: " + (data.detail || data.error));
+    } else {
+      alert(data.results.map(r => `${r.symbol}: ${r.success ? "đã đóng" : r.error}`).join("\n"));
     }
     fetchBotStatus();
     fetchAccountBalances();

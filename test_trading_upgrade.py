@@ -309,6 +309,45 @@ class TradingUpgradeTests(unittest.TestCase):
         self.assertFalse(self.bot.active_positions)
         self.api.cancel_by_client_id.assert_called_once()
 
+    def test_close_all_never_touches_untracked_exchange_positions(self):
+        self.open_position()
+        self.api.get_futures_positions.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": 2}, {"symbol": "ETHUSDT", "positionAmt": -3}]
+        self.api.create_futures_order.return_value = fill("FILLED", "2", "200")
+        result = self.bot.close_all_positions()
+        self.assertTrue(result["success"])
+        symbols = [c.args[0] if c.args else c.kwargs["symbol"] for c in self.api.create_futures_order.call_args_list]
+        self.assertNotIn("ETHUSDT", symbols)
+
+    def test_close_untracked_requires_stop_and_explicit_symbols(self):
+        with self.assertRaises(ValueError):
+            self.bot.close_untracked_positions(["ETHUSDT"])  # bot is running
+        self.bot.is_running = False
+        with self.assertRaises(ValueError):
+            self.bot.close_untracked_positions([])
+        self.api.get_futures_positions.return_value = [{"symbol": "ETHUSDT", "positionAmt": -3}]
+        self.api.create_futures_order.return_value = fill("FILLED", "3", "300")
+        result = self.bot.close_untracked_positions(["ethusdt"])
+        self.assertTrue(result["success"])
+        args, kwargs = self.api.create_futures_order.call_args
+        self.assertEqual(args[:2], ("ETHUSDT", "BUY"))
+        self.assertEqual(kwargs["quantity"], 3)
+        self.assertTrue(kwargs["reduce_only"])
+        self.assertTrue(kwargs["client_order_id"].startswith("untracked_"))
+
+    def test_close_untracked_refuses_bot_symbols_and_reports_failures(self):
+        self.open_position()
+        self.bot.is_running = False
+        self.api.create_futures_order.reset_mock()
+        self.api.get_futures_positions.return_value = [{"symbol": "ETHUSDT", "positionAmt": 1}]
+        self.api.create_futures_order.return_value = {"success": False, "unknown": True}
+        result = self.bot.close_untracked_positions(["BTCUSDT", "ETHUSDT"])
+        self.assertFalse(result["success"])
+        self.assertFalse(result["results"][0]["success"])
+        self.assertFalse(result["results"][1]["success"])
+        self.assertEqual(self.api.create_futures_order.call_count, 1)
+        self.assertIn("BTCUSDT", self.bot.active_positions)
+
     def test_stop_loss_tracks_partial_position_and_requests_cancellation(self):
         self.open_position(fill("PARTIALLY_FILLED", "1", "100"))
         self.api.get_ticker_price.return_value = {"price": "90"}

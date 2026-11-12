@@ -93,7 +93,7 @@ class BotIsolationTests(unittest.TestCase):
     def test_api_requires_market_and_routes_all_controls(self):
         with patch.object(main, "bot_manager", self.manager):
             client = TestClient(main.app)
-            for path in ("start", "stop", "config", "close-position", "close-all"):
+            for path in ("start", "stop", "config", "close-position", "close-all", "close-untracked"):
                 self.assertEqual(client.post(f"/api/bot/{path}", json={}).status_code, 422)
             self.assertEqual(client.get("/api/bot/status?market=INVALID").status_code, 422)
             response = client.post("/api/bot/config?market=SPOT", json={"trade_amount_usdt": 35, "interval": "5m"})

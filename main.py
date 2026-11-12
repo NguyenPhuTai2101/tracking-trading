@@ -294,7 +294,7 @@ def get_trade_history(symbol: str = "BTCUSDT", limit: int = 20, market: str = Qu
 # ----------------- BOT CONTROLS -----------------
 
 @app.get("/api/bot/status")
-def get_bot_status(market: Market = Market.FUTURES):
+def get_bot_status(market: Market):
     return bot_manager.engines[market].get_status()
 
 @app.get("/api/bots/status")
@@ -302,11 +302,11 @@ def get_bots_status():
     return {"bots": {market: engine.get_status() for market, engine in bot_manager.engines.items()}}
 
 @app.post("/api/bot/start")
-def start_bot(market: Market = Market.FUTURES):
+def start_bot(market: Market):
     return bot_manager.engines[market].start()
 
 @app.post("/api/bot/stop")
-def stop_bot(market: Market = Market.FUTURES):
+def stop_bot(market: Market):
     return bot_manager.engines[market].stop()
 
 @app.post("/api/bot/config")
@@ -358,6 +358,16 @@ def close_bot_position(market: Market, req: Optional[ClosePositionRequest] = Non
 def close_all_bot_positions(market: Market):
     res = bot_manager.engines[market].close_all_positions("MANUAL_FORCE_CLOSE_ALL")
     return res
+
+
+class CloseUntrackedRequest(BaseModel):
+    symbols: List[str] = Field(min_length=1, max_length=30)
+
+
+@app.post("/api/bot/close-untracked")
+def close_untracked_positions(market: Market, req: CloseUntrackedRequest):
+    """Explicit, per-symbol close of exchange positions the bot does not manage."""
+    return bot_manager.engines[market].close_untracked_positions(req.symbols)
 
 # Serve static files and root
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

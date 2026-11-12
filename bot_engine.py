@@ -286,7 +286,7 @@ class TradingBotEngine:
                 if market == "FUTURES" and not self._check_futures_positions():
                     mismatches = [f"{sym} (sàn: {d.get('exchange_quantity', 0)}, bot: {d.get('bot_quantity', 0)})" for sym, d in self.position_mismatches.items()]
                     detail = ", ".join(mismatches) if mismatches else "chưa xác định"
-                    raise ValueError(f"Vị thế Futures trên sàn chưa khớp dữ liệu bot: {detail}. Hãy bấm 'Đóng tất cả' để dọn dẹp trước khi chạy.")
+                    raise ValueError(f"Vị thế Futures trên sàn chưa khớp dữ liệu bot: {detail}. Vị thế bot không quản lý: dùng nút 'Đóng vị thế ngoài bot' (sẽ đóng trên sàn) hoặc tự xử lý trên Binance.")
             except (ValueError, RuntimeError) as exc:
                 return {"success": False, "message": str(exc)}
             with self.lock:
@@ -992,25 +992,8 @@ class TradingBotEngine:
             results = []
             for sym in list(self.active_positions):
                 results.append({"symbol": sym, "result": self._close_position(sym, exit_reason)})
-
-            # Sweep any orphan positions on exchange not tracked in active_positions
-            if self.market_type == "FUTURES":
-                try:
-                    for ep in binance_client.get_futures_positions(strict=True):
-                        amt = float(ep.get("positionAmt", 0))
-                        sym = ep["symbol"]
-                        if amt != 0 and sym not in self.active_positions:
-                            close_side = "SELL" if amt > 0 else "BUY"
-                            binance_client.create_futures_order(
-                                symbol=sym,
-                                side=close_side,
-                                order_type="MARKET",
-                                quantity=abs(amt),
-                                reduce_only=True
-                            )
-                            self.add_log("SUCCESS", f"Đã đóng vị thế sàn lẻ {sym}: {close_side} {abs(amt)}")
-                except Exception as e:
-                    self.add_log("WARN", f"Lỗi quét vị thế sàn lẻ: {e}")
+            # Positions the bot does not track are never touched here: they may be manual
+            # trades. Use close_untracked_positions with an explicit symbol list instead.
             with self.lock:
                 complete = not self.active_positions and not self.pending_orders and not self.protective_orders
                 if complete:
@@ -1022,6 +1005,60 @@ class TradingBotEngine:
                 "results": results, "message": "Đã đóng toàn bộ và dừng mở lệnh mới." if complete
                 else "Đã dừng mở lệnh mới. Bot đang tiếp tục hủy lệnh chờ và đóng vị thế.",
                 "error": None if complete else "Đang tiếp tục đóng các vị thế còn lại."}
+
+    def close_untracked_positions(self, symbols):
+        """Close exchange positions the bot does not manage, only for symbols the user named."""
+        symbols = list(dict.fromkeys(s.strip().upper() for s in symbols or [] if s and s.strip()))
+        if not symbols:
+            raise ValueError("Chọn ít nhất một mã cần đóng.")
+        if self.market_type != "FUTURES":
+            raise ValueError("Chỉ bot Futures có vị thế ngoài bot để đóng.")
+        results = []
+        with self.order_lock:
+            with self.lock:
+                if self.is_running:
+                    raise ValueError("Dừng bot trước khi đóng vị thế ngoài bot.")
+                if self.state_error:
+                    raise RuntimeError("Không đọc hoặc lưu được trạng thái bot.")
+                managed = set(self.active_positions) | set(self.pending_orders) | {
+                    o["symbol"] for o in self.protective_orders.values()}
+            for sym in symbols:
+                if sym in managed:
+                    results.append({"symbol": sym, "success": False,
+                                    "error": "Mã do bot quản lý. Dùng nút đóng vị thế của bot."})
+                    continue
+                try:
+                    positions = binance_client.get_futures_positions(sym, strict=True)
+                except (RuntimeError, ValueError) as exc:
+                    results.append({"symbol": sym, "success": False, "error": f"Không xác nhận được vị thế: {exc}"})
+                    continue
+                if any(p.get("positionSide", "BOTH") != "BOTH" for p in positions if p["symbol"] == sym):
+                    results.append({"symbol": sym, "success": False, "error": "Hedge mode không được hỗ trợ."})
+                    continue
+                amt = sum(float(p["positionAmt"]) for p in positions if p["symbol"] == sym)
+                if not amt:
+                    results.append({"symbol": sym, "success": True, "closed_quantity": 0,
+                                    "message": "Không còn vị thế trên sàn."})
+                    continue
+                side = "SELL" if amt > 0 else "BUY"
+                result = binance_client.create_futures_order(
+                    sym, side, quantity=abs(amt), reduce_only=True,
+                    client_order_id="untracked_" + uuid4().hex[:20])
+                data = result.get("data") or {}
+                if result.get("success") and data.get("status") == "FILLED":
+                    results.append({"symbol": sym, "success": True, "closed_quantity": abs(amt)})
+                    self.add_log("SUCCESS", f"Đã đóng vị thế ngoài bot {sym}: {side} {abs(amt):g}")
+                else:
+                    error = result.get("error") or f"Lệnh đóng chưa khớp hết ({data.get('status', 'không rõ')})"
+                    if result.get("unknown"):
+                        error = "Lệnh đóng chưa rõ kết quả. Kiểm tra trên Binance trước khi thử lại."
+                    results.append({"symbol": sym, "success": False, "error": error})
+                    self.add_log("WARN", f"Đóng vị thế ngoài bot {sym} thất bại: {error}")
+            try:
+                self._check_futures_positions()
+            except (RuntimeError, ValueError) as exc:
+                self.add_log("WARN", f"Đối soát Futures thất bại: {exc}")
+        return {"success": all(r["success"] for r in results), "results": results}
 
     def get_status(self) -> Dict[str, Any]:
         with self.lock:
