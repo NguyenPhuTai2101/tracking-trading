@@ -294,7 +294,7 @@ def get_trade_history(symbol: str = "BTCUSDT", limit: int = 20, market: str = Qu
 # ----------------- BOT CONTROLS -----------------
 
 @app.get("/api/bot/status")
-def get_bot_status(market: Market):
+def get_bot_status(market: Market = Market.FUTURES):
     return bot_manager.engines[market].get_status()
 
 @app.get("/api/bots/status")
@@ -302,11 +302,11 @@ def get_bots_status():
     return {"bots": {market: engine.get_status() for market, engine in bot_manager.engines.items()}}
 
 @app.post("/api/bot/start")
-def start_bot(market: Market):
+def start_bot(market: Market = Market.FUTURES):
     return bot_manager.engines[market].start()
 
 @app.post("/api/bot/stop")
-def stop_bot(market: Market):
+def stop_bot(market: Market = Market.FUTURES):
     return bot_manager.engines[market].stop()
 
 @app.post("/api/bot/config")
