@@ -421,11 +421,23 @@
               <span id="watchlist-count-badge" class="text-[11px] text-yellow-400 font-mono font-bold">6 Coin</span>
             </div>
             
+            <!-- Search any symbol of the bot's market -->
+            <div class="relative mb-2">
+              <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs"></i>
+              <input id="watchlist-search" type="text" autocomplete="off" spellcheck="false"
+                placeholder="Tìm và thêm coin (vd: TON, ARB, OP)..." aria-label="Tìm coin để thêm vào watchlist"
+                oninput="renderWatchlistSearch()" onkeydown="watchlistSearchKey(event)" onfocus="renderWatchlistSearch()"
+                onblur="setTimeout(hideWatchlistSearch, 150)"
+                class="w-full bg-[#080a0f] border border-[#232a3d] focus:border-yellow-500 rounded-lg pl-8 pr-3 py-2 text-white text-xs font-mono outline-none">
+              <div id="watchlist-search-results" role="listbox"
+                class="hidden absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-[#0f131c] border border-[#232a3d] rounded-lg shadow-xl"></div>
+            </div>
+
             <!-- Quick Chips Grid -->
             <div class="flex flex-wrap gap-1.5" id="bot-watchlist-chips">
               <!-- Dynamically populated by JS -->
             </div>
-            <p class="text-[10px] text-gray-400 mt-1.5">Chọn các coin muốn theo dõi rồi bấm Lưu Cấu Hình Bot.</p>
+            <p class="text-[10px] text-gray-400 mt-1.5">Bấm chip để bật/tắt, hoặc tìm coin để thêm (tối đa 30). Xong bấm Lưu Cấu Hình Bot.</p>
           </div>
 
           <!-- Max Concurrent Positions -->

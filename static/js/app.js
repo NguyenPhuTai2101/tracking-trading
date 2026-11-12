@@ -716,7 +716,7 @@ function renderWatchlistChips() {
   if (!container) return;
 
   const countBadge = document.getElementById("watchlist-count-badge");
-  if (countBadge) countBadge.textContent = `${state.watchlistSymbols.length} Coin`;
+  if (countBadge) countBadge.textContent = `${state.watchlistSymbols.length}/${MAX_WATCHLIST} Coin`;
 
   // Merge known candidates with current watchlist
   const suggested = POPULAR_WATCHLIST_CANDIDATES.flatMap(sym => [sym, "1000" + sym]);
@@ -746,10 +746,85 @@ function toggleWatchlistCoin(sym) {
     }
     state.watchlistSymbols.splice(idx, 1);
   } else {
+    if (state.watchlistSymbols.length >= MAX_WATCHLIST) {
+      alert(`Watchlist tối đa ${MAX_WATCHLIST} coin. Bỏ bớt coin trước khi thêm.`);
+      return;
+    }
     state.watchlistSymbols.push(sym);
   }
   renderWatchlistChips();
   markBotDirty();
+}
+
+// ---- Watchlist search: add any symbol the bot's market trades ----
+const MAX_WATCHLIST = 30;   // matches BotConfigRequest.watchlist_symbols max_length
+let watchlistSearchMatches = [];
+
+function findWatchlistMatches(query) {
+  const q = query.trim().toUpperCase().replace(/USDT$/, "");
+  if (!q || !botSymbols.length) return [];
+  const scored = [];
+  for (const sym of botSymbols) {
+    if (state.watchlistSymbols.includes(sym)) continue;
+    const base = sym.replace(/USDT$/, "");
+    const plain = base.replace(/^1000/, "");
+    let score = -1;
+    if (base === q || plain === q) score = 0;
+    else if (plain.startsWith(q) || base.startsWith(q)) score = 1;
+    else if (base.includes(q)) score = 2;
+    if (score >= 0) scored.push([score, base.length, sym]);
+  }
+  scored.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2]));
+  return scored.slice(0, 8).map(item => item[2]);
+}
+
+function renderWatchlistSearch() {
+  const input = document.getElementById("watchlist-search");
+  const box = document.getElementById("watchlist-search-results");
+  if (!input || !box) return;
+  const query = input.value;
+  watchlistSearchMatches = findWatchlistMatches(query);
+  if (!query.trim()) {
+    box.classList.add("hidden");
+    return;
+  }
+  const full = state.watchlistSymbols.length >= MAX_WATCHLIST;
+  box.innerHTML = full
+    ? `<div class="px-3 py-2 text-xs text-amber-300">Đã đủ ${MAX_WATCHLIST} coin. Bỏ bớt trước khi thêm.</div>`
+    : watchlistSearchMatches.length
+      ? watchlistSearchMatches.map((sym, i) => `
+          <button type="button" role="option" onmousedown="event.preventDefault()" onclick="addWatchlistCoin('${sym}')"
+            class="w-full text-left px-3 py-2 text-xs font-mono flex items-center justify-between hover:bg-[#232a3d] ${i === 0 ? "bg-[#1a2030]" : ""}">
+            <span class="text-white font-semibold">${sym.replace(/USDT$/, "")}<span class="text-gray-500">/USDT</span></span>
+            <i class="fa-solid fa-plus text-yellow-400 text-[10px]"></i>
+          </button>`).join("")
+      : `<div class="px-3 py-2 text-xs text-gray-400">${botSymbols.length ? `Không có mã "${query.trim().toUpperCase()}" trên ${selectedBotMarket} (hoặc đã có trong watchlist).` : "Đang tải danh sách coin..."}</div>`;
+  box.classList.remove("hidden");
+}
+
+function hideWatchlistSearch() {
+  const box = document.getElementById("watchlist-search-results");
+  if (box) box.classList.add("hidden");
+}
+
+function addWatchlistCoin(sym) {
+  if (!state.watchlistSymbols.includes(sym)) toggleWatchlistCoin(sym);
+  const input = document.getElementById("watchlist-search");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  hideWatchlistSearch();
+}
+
+function watchlistSearchKey(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (watchlistSearchMatches.length) addWatchlistCoin(watchlistSearchMatches[0]);
+  } else if (event.key === "Escape") {
+    event.target.value = "";
+    hideWatchlistSearch();
+  }
 }
 
 function setMaxPositions(val) {
