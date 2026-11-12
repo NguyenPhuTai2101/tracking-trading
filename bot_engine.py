@@ -284,7 +284,9 @@ class TradingBotEngine:
                 if not self._protection_ready():
                     raise ValueError("Còn vị thế hoặc lệnh cắt lỗ chưa xác nhận bảo vệ.")
                 if market == "FUTURES" and not self._check_futures_positions():
-                    raise ValueError("Vị thế Futures trên sàn chưa khớp dữ liệu bot.")
+                    mismatches = [f"{sym} (sàn: {d.get('exchange_quantity', 0)}, bot: {d.get('bot_quantity', 0)})" for sym, d in self.position_mismatches.items()]
+                    detail = ", ".join(mismatches) if mismatches else "chưa xác định"
+                    raise ValueError(f"Vị thế Futures trên sàn chưa khớp dữ liệu bot: {detail}. Hãy bấm 'Đóng tất cả' để dọn dẹp trước khi chạy.")
             except (ValueError, RuntimeError) as exc:
                 return {"success": False, "message": str(exc)}
             with self.lock:
@@ -990,6 +992,25 @@ class TradingBotEngine:
             results = []
             for sym in list(self.active_positions):
                 results.append({"symbol": sym, "result": self._close_position(sym, exit_reason)})
+
+            # Sweep any orphan positions on exchange not tracked in active_positions
+            if self.market_type == "FUTURES":
+                try:
+                    for ep in binance_client.get_futures_positions(strict=True):
+                        amt = float(ep.get("positionAmt", 0))
+                        sym = ep["symbol"]
+                        if amt != 0 and sym not in self.active_positions:
+                            close_side = "SELL" if amt > 0 else "BUY"
+                            binance_client.create_futures_order(
+                                symbol=sym,
+                                side=close_side,
+                                order_type="MARKET",
+                                quantity=abs(amt),
+                                reduce_only=True
+                            )
+                            self.add_log("SUCCESS", f"Đã đóng vị thế sàn lẻ {sym}: {close_side} {abs(amt)}")
+                except Exception as e:
+                    self.add_log("WARN", f"Lỗi quét vị thế sàn lẻ: {e}")
             with self.lock:
                 complete = not self.active_positions and not self.pending_orders and not self.protective_orders
                 if complete:
