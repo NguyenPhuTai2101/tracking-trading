@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+bot_state.json
+bot_state.json.tmp
+bot_state.json.lock
+bot_state_spot.json*
+bot_state_futures.json*
+demo_stop_probe.json

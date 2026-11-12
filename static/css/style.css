@@ -1,0 +1,235 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #080a0f;
+  --bg-secondary: #0f131c;
+  --bg-card: #151a26;
+  --bg-card-hover: #1c2233;
+  --border-color: #232a3d;
+  --border-light: #2e374f;
+  --accent-gold: #f0b90b;
+  --accent-gold-hover: #fcd535;
+  --accent-green: #0ecb81;
+  --accent-red: #f6465d;
+  --accent-purple: #8b5cf6;
+  --accent-blue: #3b82f6;
+  --text-primary: #f3f4f6;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  overflow-x: hidden;
+  letter-spacing: -0.01em;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: #252d40;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3b4661;
+}
+
+/* Glassmorphism & Cards */
+.card-glass {
+  background: rgba(21, 26, 38, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-glass:hover {
+  border-color: var(--border-light);
+}
+
+.terminal-box {
+  background-color: #06080d;
+  border: 1px solid #1a202e;
+  border-radius: 10px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Glowing Badges */
+.badge-buy {
+  background: rgba(14, 203, 129, 0.12);
+  border: 1px solid rgba(14, 203, 129, 0.35);
+  color: #0ecb81;
+}
+
+.badge-sell {
+  background: rgba(246, 70, 93, 0.12);
+  border: 1px solid rgba(246, 70, 93, 0.35);
+  color: #f6465d;
+}
+
+.badge-gold {
+  background: rgba(240, 185, 11, 0.12);
+  border: 1px solid rgba(240, 185, 11, 0.35);
+  color: #f0b90b;
+}
+
+.badge-purple {
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  color: #a78bfa;
+}
+
+/* Pulsing Dots */
+.pulse-green {
+  box-shadow: 0 0 0 0 rgba(14, 203, 129, 0.7);
+  animation: pulseGreen 1.8s infinite;
+}
+
+@keyframes pulseGreen {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(14, 203, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(14, 203, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(14, 203, 129, 0);
+  }
+}
+
+.pulse-gold {
+  box-shadow: 0 0 0 0 rgba(240, 185, 11, 0.7);
+  animation: pulseGold 1.8s infinite;
+}
+
+@keyframes pulseGold {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(240, 185, 11, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(240, 185, 11, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(240, 185, 11, 0);
+  }
+}
+
+.pulse-red {
+  box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.7);
+  animation: pulseRed 1.8s infinite;
+}
+
+@keyframes pulseRed {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(246, 70, 93, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(246, 70, 93, 0);
+  }
+}
+
+/* Tab Navigation */
+.tab-btn {
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+  color: #f0b90b;
+  border-bottom: 2px solid #f0b90b;
+  background: rgba(240, 185, 11, 0.04);
+}
+
+.strategy-card {
+  transition: all 0.2s ease;
+  background: #0d1017;
+  border: 1px solid #232a3d;
+}
+
+.strategy-card:hover {
+  border-color: #3b4661;
+}
+
+.strategy-card.selected {
+  border-color: #f0b90b;
+  background: rgba(240, 185, 11, 0.08);
+  box-shadow: 0 0 15px -3px rgba(240, 185, 11, 0.2);
+}
+
+/* Multi-coin Watchlist Chips */
+.coin-chip {
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease-in-out;
+  border: 1px solid #232a3d;
+  background: #0c0f17;
+  color: #94a3b8;
+}
+
+.coin-chip:hover {
+  border-color: #3b4661;
+  color: #fff;
+}
+
+.coin-chip.active {
+  border-color: #f0b90b;
+  background: rgba(240, 185, 11, 0.15);
+  color: #f0b90b;
+  font-weight: 700;
+  box-shadow: 0 2px 8px -2px rgba(240, 185, 11, 0.25);
+}
+
+/* Position Table Row Animations */
+.pos-row-enter {
+  animation: slideInRow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideInRow {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Smooth Glow Borders */
+.glow-gold {
+  box-shadow: 0 0 20px -5px rgba(240, 185, 11, 0.25);
+}
+.glow-purple {
+  box-shadow: 0 0 20px -5px rgba(139, 92, 246, 0.25);
+}
+.glow-green {
+  box-shadow: 0 0 20px -5px rgba(14, 203, 129, 0.25);
+}
+.glow-red {
+  box-shadow: 0 0 20px -5px rgba(246, 70, 93, 0.25);
+}

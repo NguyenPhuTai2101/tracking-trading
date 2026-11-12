@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Binance Demo Multi-Coin Trading Hub & Academy</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- FontAwesome 6 CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- TradingView Lightweight Charts CDN -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="min-h-screen flex flex-col bg-[#080a0f] text-[#f3f4f6]">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-[#0f131c]/90 backdrop-blur-md border-b border-[#232a3d] px-4 md:px-6 py-3 sticky top-0 z-50">
+    <div class="max-w-[1720px] mx-auto flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Brand & Mode Switcher -->
+      <div class="flex items-center space-x-3 md:space-x-4">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-400 to-amber-600 flex items-center justify-center text-black font-extrabold text-xl shadow-lg shadow-yellow-500/20">
+          <i class="fa-brands fa-bitcoin"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <span class="font-extrabold text-lg tracking-wide text-white" id="brand-title">BINANCE DEMO</span>
+            <span id="market-badge" class="px-2 py-0.5 text-[11px] font-bold rounded-md bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">SPOT MODE</span>
+          </div>
+          <p class="text-[11px] text-gray-400">Multi-Coin Trading Bot & Trung Tâm Học Viện</p>
+        </div>
+
+        <!-- Mode Toggle Segmented Button -->
+        <div class="bg-[#06080d] p-1 rounded-xl border border-[#232a3d] flex items-center space-x-1 ml-1 md:ml-3">
+          <button onclick="setMarketMode('SPOT')" id="mode-btn-spot" class="px-3 py-1 rounded-lg text-xs font-bold transition-all bg-yellow-500 text-black shadow">
+            <i class="fa-solid fa-coins mr-1"></i> SPOT
+          </button>
+          <button onclick="setMarketMode('FUTURES')" id="mode-btn-futures" class="px-3 py-1 rounded-lg text-xs font-bold text-gray-400 hover:text-white transition-all">
+            <i class="fa-solid fa-bolt mr-1 text-purple-400"></i> FUTURES
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Watchlist Tickers Strip -->
+      <div class="hidden xl:flex items-center space-x-5 bg-[#080a0f] px-4 py-1.5 rounded-xl border border-[#232a3d] text-xs font-mono" id="ticker-strip">
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('BTCUSDT')">
+          <span class="text-gray-400">BTC:</span>
+          <span id="ticker-BTCUSDT" class="text-yellow-400 font-bold">---</span>
+        </div>
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('ETHUSDT')">
+          <span class="text-gray-400">ETH:</span>
+          <span id="ticker-ETHUSDT" class="text-white font-bold">---</span>
+        </div>
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('SOLUSDT')">
+          <span class="text-gray-400">SOL:</span>
+          <span id="ticker-SOLUSDT" class="text-white font-bold">---</span>
+        </div>
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('BNBUSDT')">
+          <span class="text-gray-400">BNB:</span>
+          <span id="ticker-BNBUSDT" class="text-yellow-400 font-bold">---</span>
+        </div>
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('SUIUSDT')">
+          <span class="text-gray-400">SUI:</span>
+          <span id="ticker-SUIUSDT" class="text-cyan-400 font-bold">---</span>
+        </div>
+        <div class="flex items-center space-x-1.5 cursor-pointer hover:opacity-80" onclick="selectSymbol('DOGEUSDT')">
+          <span class="text-gray-400">DOGE:</span>
+          <span id="ticker-DOGEUSDT" class="text-amber-300 font-bold">---</span>
+        </div>
+      </div>
+
+      <!-- Account Balance & System Status -->
+      <div class="flex items-center space-x-3">
+        <!-- Ping Status -->
+        <div class="flex items-center space-x-2 bg-[#151a26] px-3 py-1.5 rounded-xl border border-[#232a3d]">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-green"></span>
+          <span class="text-xs font-semibold text-emerald-400" id="server-status-text">Demo Sẵn Sàng</span>
+          <span class="text-[11px] text-gray-400 font-mono" id="server-latency">-- ms</span>
+        </div>
+
+        <!-- Wallet Balance Card -->
+        <div class="bg-gradient-to-r from-[#151a26] to-[#1c2233] px-4 py-1.5 rounded-xl border border-yellow-500/30 flex items-center space-x-3 shadow-md">
+          <i id="wallet-icon" class="fa-solid fa-wallet text-yellow-400 text-sm"></i>
+          <div>
+            <div class="text-[10px] text-gray-400 uppercase tracking-wider" id="wallet-label">Ví Spot Demo</div>
+            <div class="text-sm font-bold font-mono text-white flex items-center space-x-1.5">
+              <span id="usdt-balance">5,000.00</span> <span class="text-yellow-400 text-xs">USDT</span>
+            </div>
+          </div>
+          <button onclick="fetchAccountBalances()" title="Làm mới số dư" class="text-gray-400 hover:text-yellow-400 transition-colors pl-1">
+            <i class="fa-solid fa-arrows-rotate text-xs"></i>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Sub Navigation Bar -->
+  <div class="bg-[#0f131c] border-b border-[#232a3d] px-4 md:px-6">
+    <div class="max-w-[1720px] mx-auto flex space-x-6 md:space-x-8 overflow-x-auto">
+      <button onclick="switchTab('terminal')" id="tab-btn-terminal" class="tab-btn active py-3 font-semibold text-xs md:text-sm flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-chart-line"></i>
+        <span>Terminal & Bot Auto</span>
+      </button>
+
+      <button onclick="switchTab('positions')" id="tab-btn-positions" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-layer-group text-purple-400"></i>
+        <span>Quản Lý Vị Thế Đang Mở</span>
+        <span id="active-pos-counter" class="ml-1 px-1.5 py-0.2 rounded-full bg-purple-500/20 text-purple-400 text-[10px] font-bold border border-purple-500/30">0</span>
+      </button>
+
+      <button onclick="switchTab('academy')" id="tab-btn-academy" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-graduation-cap text-yellow-400"></i>
+        <span>Học Viện & Luật Sàn</span>
+      </button>
+
+      <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-clock-rotate-left"></i>
+        <span>Lịch Sử & Hiệu Suất</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- MAIN VIEWPORT -->
+  <main class="flex-1 max-w-[1720px] w-full mx-auto p-3 md:p-6">
+
+    <!-- ======================================================== -->
+    <!-- TAB 1: TERMINAL & BOT AUTO (MAIN DASHBOARD) -->
+    <!-- ======================================================== -->
+    <div id="tab-content-terminal" class="grid grid-cols-1 xl:grid-cols-12 gap-5">
+      
+      <!-- LEFT SECTION (8 Cols): Chart, Indicators, & Active Positions Widget -->
+      <div class="xl:col-span-8 flex flex-col space-y-5">
+        
+        <!-- Chart Container Card -->
+        <div class="card-glass p-4 md:p-5">
+          <!-- Chart Header & Controls -->
+          <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#232a3d]">
+            <div class="flex flex-wrap items-center gap-3">
+              <!-- Searchable Coin Selector Trigger -->
+              <div class="relative">
+                <button type="button" onclick="toggleCoinModal()" id="coin-select-btn" class="bg-[#080a0f] border border-[#232a3d] text-white font-bold text-sm md:text-base rounded-xl px-3.5 py-2 flex items-center space-x-2 hover:border-yellow-500/60 transition-all shadow">
+                  <span id="selected-coin-icon" class="w-6 h-6 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-bold flex items-center justify-center">₿</span>
+                  <span id="selected-coin-symbol">BTC / USDT</span>
+                  <i class="fa-solid fa-chevron-down text-xs text-gray-400 ml-1"></i>
+                </button>
+              </div>
+
+              <!-- Current Price & 24h Change -->
+              <div class="flex items-baseline space-x-2 pl-1">
+                <span class="text-xl md:text-2xl font-bold font-mono text-white" id="current-price">--</span>
+                <span class="text-xs font-mono font-semibold" id="price-change">+0.00%</span>
+              </div>
+            </div>
+
+            <!-- Timeframe Selector -->
+            <div class="flex items-center bg-[#080a0f] p-1 rounded-xl border border-[#232a3d] text-xs">
+              <button onclick="changeInterval('1m')" class="tf-btn px-2.5 py-1 rounded text-gray-400 hover:text-white" data-tf="1m">1m</button>
+              <button onclick="changeInterval('5m')" class="tf-btn px-2.5 py-1 rounded text-gray-400 hover:text-white" data-tf="5m">5m</button>
+              <button onclick="changeInterval('15m')" class="tf-btn px-2.5 py-1 rounded bg-[#232a3d] text-yellow-400 font-bold" data-tf="15m">15m</button>
+              <button onclick="changeInterval('1h')" class="tf-btn px-2.5 py-1 rounded text-gray-400 hover:text-white" data-tf="1h">1h</button>
+              <button onclick="changeInterval('4h')" class="tf-btn px-2.5 py-1 rounded text-gray-400 hover:text-white" data-tf="4h">4h</button>
+            </div>
+          </div>
+
+          <!-- Hot Coins Fast Selector Pills -->
+          <div class="flex items-center space-x-1.5 pt-3 overflow-x-auto text-xs pb-1" id="hot-coin-pills">
+            <span class="text-gray-400 text-[11px] font-semibold whitespace-nowrap flex items-center mr-1">
+              <i class="fa-solid fa-fire text-amber-500 mr-1"></i> HOT:
+            </span>
+            <button onclick="selectSymbol('BTCUSDT')" class="coin-pill active px-2.5 py-1 rounded-lg bg-[#232a3d] text-yellow-400 font-bold font-mono" data-sym="BTCUSDT">BTC</button>
+            <button onclick="selectSymbol('ETHUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="ETHUSDT">ETH</button>
+            <button onclick="selectSymbol('SOLUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="SOLUSDT">SOL</button>
+            <button onclick="selectSymbol('BNBUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="BNBUSDT">BNB</button>
+            <button onclick="selectSymbol('SUIUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="SUIUSDT">SUI</button>
+            <button onclick="selectSymbol('NEARUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="NEARUSDT">NEAR</button>
+            <button onclick="selectSymbol('PEPEUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="PEPEUSDT">PEPE</button>
+            <button onclick="selectSymbol('DOGEUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="DOGEUSDT">DOGE</button>
+            <button onclick="selectSymbol('XRPUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="XRPUSDT">XRP</button>
+            <button onclick="selectSymbol('AVAXUSDT')" class="coin-pill px-2.5 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white font-mono" data-sym="AVAXUSDT">AVAX</button>
+            
+            <button onclick="toggleCoinModal()" class="px-2.5 py-1 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500 hover:text-black font-semibold transition-all whitespace-nowrap ml-1">
+              <i class="fa-solid fa-magnifying-glass mr-1"></i> Tất cả 500+ coin
+            </button>
+          </div>
+
+          <!-- Candlestick Chart View -->
+          <div id="tv-chart" class="w-full h-[430px] mt-3 relative rounded-lg overflow-hidden border border-[#232a3d]/50">
+            <div id="chart-loading" class="absolute inset-0 flex items-center justify-center bg-[#080a0f]/80 z-10 text-gray-400">
+              <i class="fa-solid fa-spinner fa-spin text-2xl text-yellow-400 mr-3"></i> Đang tải biểu đồ nến Binance Demo...
+            </div>
+          </div>
+        </div>
+
+        <!-- Technical Signals & AI Recommendation -->
+        <div class="card-glass p-4 md:p-5">
+          <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+            <div class="flex items-center space-x-3">
+              <div class="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                <i class="fa-solid fa-microchip"></i>
+              </div>
+              <div>
+                <h3 class="text-sm md:text-base font-bold text-white">Chỉ Số Kỹ Thuật & Tín Hiệu AI Realtime</h3>
+                <p class="text-xs text-gray-400">Tự động tính: RSI(14), EMA(9/21), MACD & Bollinger Bands</p>
+              </div>
+            </div>
+            
+            <!-- Overall Signal Badge -->
+            <div id="signal-badge" class="px-3.5 py-1.5 rounded-lg font-bold text-xs badge-buy flex items-center space-x-2">
+              <i class="fa-solid fa-arrow-trend-up"></i>
+              <span id="signal-action-text">ĐANG PHÂN TÍCH...</span>
+            </div>
+          </div>
+
+          <!-- Indicators Meter Grid -->
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 my-3">
+            <!-- RSI Box -->
+            <div class="bg-[#080a0f] p-3 rounded-xl border border-[#232a3d]">
+              <div class="text-[11px] text-gray-400 flex justify-between">
+                <span>RSI (14)</span>
+                <span id="rsi-status-badge" class="font-semibold text-emerald-400">Trung tính</span>
+              </div>
+              <div class="text-xl font-bold font-mono text-white mt-1" id="rsi-val">--</div>
+              <div class="w-full bg-[#151a26] h-1.5 rounded-full mt-2 overflow-hidden">
+                <div id="rsi-bar" class="bg-yellow-400 h-full rounded-full transition-all" style="width: 50%"></div>
+              </div>
+            </div>
+
+            <!-- EMA Box -->
+            <div class="bg-[#080a0f] p-3 rounded-xl border border-[#232a3d]">
+              <div class="text-[11px] text-gray-400 flex justify-between">
+                <span>EMA (9) vs (21)</span>
+                <span id="ema-trend-badge" class="font-semibold text-emerald-400">Bullish</span>
+              </div>
+              <div class="text-xs font-mono text-gray-300 mt-1 flex justify-between">
+                <span>EMA9: <b id="ema9-val" class="text-blue-400">--</b></span>
+              </div>
+              <div class="text-xs font-mono text-gray-300 flex justify-between mt-0.5">
+                <span>EMA21: <b id="ema21-val" class="text-purple-400">--</b></span>
+              </div>
+            </div>
+
+            <!-- MACD Box -->
+            <div class="bg-[#080a0f] p-3 rounded-xl border border-[#232a3d]">
+              <div class="text-[11px] text-gray-400 flex justify-between">
+                <span>MACD (12, 26, 9)</span>
+                <span id="macd-hist-badge" class="font-semibold text-emerald-400">+0.00</span>
+              </div>
+              <div class="text-[11px] font-mono text-gray-300 mt-1">
+                <div>MACD: <span id="macd-line-val" class="text-white">--</span></div>
+                <div>Signal: <span id="macd-sig-val" class="text-gray-400">--</span></div>
+              </div>
+            </div>
+
+            <!-- Bollinger Bands Box -->
+            <div class="bg-[#080a0f] p-3 rounded-xl border border-[#232a3d]">
+              <div class="text-[11px] text-gray-400 flex justify-between">
+                <span>Bollinger Bands</span>
+                <span id="bb-status" class="font-semibold text-gray-400">Trong kênh</span>
+              </div>
+              <div class="text-[11px] font-mono text-gray-300 mt-1">
+                <div>Dải trên: <span id="bb-upper" class="text-red-400">--</span></div>
+                <div>Dải dưới: <span id="bb-lower" class="text-emerald-400">--</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Suggested Setup (Entry / TP / SL) & Reasons -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+            <div class="md:col-span-2">
+              <h4 class="text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5 flex items-center">
+                <i class="fa-solid fa-list-check text-yellow-400 mr-2"></i> Cơ sở phân tích & Điểm số:
+              </h4>
+              <ul id="signal-reasons-list" class="space-y-1 text-xs text-gray-300">
+                <li>Đang phân tích dữ liệu nến...</li>
+              </ul>
+            </div>
+
+            <div class="border-t md:border-t-0 md:border-l border-[#232a3d] md:pl-4 flex flex-col justify-center space-y-1.5 text-xs">
+              <div class="text-gray-400 flex justify-between">
+                <span>Gợi ý ATR · biểu đồ:</span>
+                <span id="futures-leverage-tag" class="text-purple-400 font-bold hidden">10x Futures</span>
+              </div>
+              <div class="flex justify-between font-mono">
+                <span class="text-gray-400">Entry:</span>
+                <span id="suggested-entry" class="text-white font-bold">--</span>
+              </div>
+              <div class="flex justify-between font-mono">
+                <span class="text-emerald-400">TP:</span>
+                <span id="suggested-tp" class="text-emerald-400 font-bold">--</span>
+              </div>
+              <div class="flex justify-between font-mono">
+                <span class="text-red-400">SL:</span>
+                <span id="suggested-sl" class="text-red-400 font-bold">--</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Terminal Quick Active Positions Table -->
+        <div class="card-glass p-4 md:p-5">
+          <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+            <div class="flex items-center space-x-2.5">
+              <div class="w-7 h-7 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center text-xs">
+                <i class="fa-solid fa-bolt"></i>
+              </div>
+              <h3 class="text-sm font-bold text-white flex items-center">
+                <span>Vị thế đang mở · <span class="selected-bot-label">Bot FUTURES</span></span>
+                <span id="terminal-pos-count-badge" class="ml-2 px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 text-xs font-mono font-bold">0</span>
+              </h3>
+            </div>
+
+            <!-- Close All Button -->
+            <button onclick="closeAllPositions()" id="btn-close-all-terminal" class="hidden px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500 text-red-300 hover:text-white font-bold text-xs transition-all flex items-center space-x-1.5">
+              <i class="fa-solid fa-bolt-lightning text-yellow-400"></i>
+              <span>Đóng Tất Cả Vị Thế</span>
+            </button>
+          </div>
+
+          <!-- Position Table / Cards Container -->
+          <div id="terminal-positions-container" class="mt-3 overflow-x-auto">
+            <div class="py-8 text-center text-gray-500 text-xs font-sans">
+              <i class="fa-solid fa-inbox text-2xl mb-1 text-gray-600 block"></i>
+              Chưa có vị thế nào đang mở. Vị thế do bot mở sẽ hiển thị tại đây. Lệnh tay được theo dõi trong tài khoản Binance Demo.
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT SECTION (4 Cols): Bot Multi-Coin Controller & Manual Trading -->
+      <div class="xl:col-span-4 flex flex-col space-y-5">
+        <div class="card-glass p-4">
+          <h3 class="text-sm font-bold text-white">Hai bot độc lập</h3>
+          <p class="text-xs text-gray-400 mt-1 mb-3">Mỗi bot có vốn, chiến lược và nút chạy riêng. Có thể chạy một hoặc cả hai.</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div id="bot-summary-SPOT" class="rounded-xl border border-[#232a3d] bg-[#080a0f] p-3 space-y-2">
+              <div class="font-bold text-yellow-400 text-sm">BOT SPOT</div>
+              <div id="bot-summary-status-SPOT" class="text-xs text-gray-300">Đang tải…</div>
+              <div id="bot-summary-config-SPOT" class="text-[11px] text-gray-400 break-words"></div>
+              <div id="bot-summary-positions-SPOT" class="text-[11px] text-gray-300"></div>
+              <button id="bot-edit-SPOT" onclick="selectBot('SPOT')" class="w-full py-1.5 rounded-lg bg-[#232a3d] text-white text-xs">Thiết lập</button>
+              <button id="bot-power-SPOT" onclick="toggleBotPower('SPOT')" class="w-full py-1.5 rounded-lg bg-yellow-500/20 text-yellow-300 text-xs font-bold">Chạy SPOT</button>
+            </div>
+            <div id="bot-summary-FUTURES" class="rounded-xl border border-[#232a3d] bg-[#080a0f] p-3 space-y-2">
+              <div class="font-bold text-purple-400 text-sm">BOT FUTURES</div>
+              <div id="bot-summary-status-FUTURES" class="text-xs text-gray-300">Đang tải…</div>
+              <div id="bot-summary-config-FUTURES" class="text-[11px] text-gray-400 break-words"></div>
+              <div id="bot-summary-positions-FUTURES" class="text-[11px] text-gray-300"></div>
+              <button id="bot-edit-FUTURES" onclick="selectBot('FUTURES')" class="w-full py-1.5 rounded-lg bg-[#232a3d] text-white text-xs">Thiết lập</button>
+              <button id="bot-power-FUTURES" onclick="toggleBotPower('FUTURES')" class="w-full py-1.5 rounded-lg bg-purple-500/20 text-purple-300 text-xs font-bold">Chạy FUTURES</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- ================= BOT MULTI-COIN CONTROLLER ================= -->
+        <div id="bot-main-card" class="card-glass p-5 border-l-4 border-l-yellow-500">
+          <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+            <div class="flex items-center space-x-3">
+              <div class="w-8 h-8 rounded-xl bg-yellow-500/20 text-yellow-400 flex items-center justify-center">
+                <i class="fa-solid fa-robot"></i>
+              </div>
+              <div>
+                <h3 class="text-sm md:text-base font-bold text-white flex items-center space-x-2">
+                  <span>Thiết lập bot</span>
+                  <span id="bot-market-tag" class="px-2 py-0.5 text-[10px] font-bold rounded bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">SPOT</span>
+                </h3>
+                <p class="text-xs text-gray-400" id="bot-desc-text">Quét và giao dịch đa coin tự động</p>
+              </div>
+            </div>
+
+            <!-- Bot Power Button -->
+            <button id="bot-toggle-btn" onclick="toggleBotPower()" class="px-3.5 py-2 rounded-xl font-bold text-xs bg-emerald-500 hover:bg-emerald-400 text-black flex items-center space-x-1.5 transition-all shadow-lg shadow-emerald-500/20">
+              <i class="fa-solid fa-play"></i>
+              <span id="bot-toggle-text">KHỞI ĐỘNG</span>
+            </button>
+          </div>
+
+          <fieldset id="bot-settings-fields">
+          <div class="grid grid-cols-2 gap-2.5 mt-3 text-xs">
+            <label class="text-gray-400">Đang chỉnh bot
+              <select id="bot-market" onchange="changeBotMarket()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
+                <option value="SPOT">Spot</option><option value="FUTURES">Futures</option>
+              </select>
+            </label>
+            <label class="text-gray-400">Khung nến bot
+              <select id="bot-timeframe" onchange="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
+                <option>1m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option>
+                <option>1h</option><option>2h</option><option>4h</option><option>6h</option><option>8h</option><option>12h</option><option>1d</option>
+              </select>
+            </label>
+          </div>
+          <p id="bot-config-status" class="text-xs text-gray-400 mt-2">Đang tải cấu hình bot…</p>
+          <p id="bot-monitor-status" class="text-xs text-gray-400 mt-2"></p>
+          <p class="text-xs text-gray-400 mt-2">Dừng mở lệnh vẫn giữ giám sát. SL Futures có lệnh bảo vệ trên sàn sau khi xác nhận; TP và TP/SL Spot cần ứng dụng đang kết nối.</p>
+
+          <!-- Multi-Coin Watchlist Selector (Chips) -->
+          <div class="mt-4">
+            <div class="flex items-center justify-between mb-2">
+              <label class="text-xs font-bold text-gray-300 flex items-center">
+                <i class="fa-solid fa-satellite-dish text-yellow-400 mr-1.5"></i> Danh mục Coin Bot Quét (Watchlist):
+              </label>
+              <span id="watchlist-count-badge" class="text-[11px] text-yellow-400 font-mono font-bold">6 Coin</span>
+            </div>
+            
+            <!-- Quick Chips Grid -->
+            <div class="flex flex-wrap gap-1.5" id="bot-watchlist-chips">
+              <!-- Dynamically populated by JS -->
+            </div>
+            <p class="text-[10px] text-gray-400 mt-1.5">Chọn các coin muốn theo dõi rồi bấm Lưu Cấu Hình Bot.</p>
+          </div>
+
+          <!-- Max Concurrent Positions -->
+          <div class="mt-3.5 p-3 rounded-xl bg-[#080a0f] border border-[#232a3d]">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="text-gray-300 font-semibold"><i class="fa-solid fa-cubes-stacked text-blue-400 mr-1"></i> Số vị thế mở tối đa cùng lúc:</span>
+              <span id="max-pos-display" class="font-bold text-yellow-400 font-mono">3 lệnh</span>
+            </div>
+            <div class="grid grid-cols-4 gap-1.5 text-xs">
+              <button type="button" onclick="setMaxPositions(1)" class="max-pos-btn py-1 rounded-lg border border-[#232a3d] text-gray-300 font-mono font-bold" data-val="1">1 vị thế</button>
+              <button type="button" onclick="setMaxPositions(2)" class="max-pos-btn py-1 rounded-lg border border-[#232a3d] text-gray-300 font-mono font-bold" data-val="2">2 vị thế</button>
+              <button type="button" onclick="setMaxPositions(3)" class="max-pos-btn py-1 rounded-lg bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 font-mono font-bold" data-val="3">3 (Chuẩn)</button>
+              <button type="button" onclick="setMaxPositions(5)" class="max-pos-btn py-1 rounded-lg border border-[#232a3d] text-gray-300 font-mono font-bold" data-val="5">5 (Tối đa)</button>
+            </div>
+          </div>
+
+          <!-- Futures Leverage Setting Row (visible in Futures mode) -->
+          <div id="futures-leverage-row" class="mt-3 p-3 rounded-xl bg-[#080a0f] border border-purple-500/30 hidden">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="text-gray-300 font-semibold"><i class="fa-solid fa-bolt text-purple-400 mr-1"></i> Đòn Bẩy Futures (Leverage):</span>
+              <span id="leverage-display-val" class="font-bold text-purple-400 font-mono">10x</span>
+            </div>
+            <div class="grid grid-cols-5 gap-1.5 text-xs">
+              <button type="button" onclick="setBotLeverage(2)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="2">2x</button>
+              <button type="button" onclick="setBotLeverage(5)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="5">5x</button>
+              <button type="button" onclick="setBotLeverage(10)" class="lev-btn py-1 rounded-lg bg-purple-600/30 border border-purple-400 text-purple-300 font-mono font-bold" data-lev="10">10x</button>
+              <button type="button" onclick="setBotLeverage(20)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="20">20x</button>
+              <button type="button" onclick="setBotLeverage(50)" class="lev-btn py-1 rounded-lg border border-[#232a3d] hover:border-purple-400 text-gray-300 font-mono font-bold" data-lev="50">50x</button>
+            </div>
+          </div>
+
+          <!-- Strategy Selection Cards -->
+          <div class="mt-3.5">
+            <label class="text-xs font-semibold text-gray-300 block mb-2">Chiến Thuật Giao Dịch:</label>
+            <div class="grid grid-cols-3 gap-2">
+              <button type="button" onclick="selectStrategy('HYBRID_SMART')" id="strat-HYBRID_SMART" class="strategy-card selected p-2 rounded-xl text-center text-xs transition-all">
+                <i class="fa-solid fa-brain block mb-1 text-yellow-400 text-sm"></i>
+                <span class="font-bold text-white block">Hybrid AI</span>
+                <span class="text-[10px] text-gray-400">2 Chiều Đa Coin</span>
+              </button>
+
+              <button type="button" onclick="selectStrategy('RSI_SCALPING')" id="strat-RSI_SCALPING" class="strategy-card p-2 rounded-xl text-center text-xs transition-all">
+                <i class="fa-solid fa-wave-square block mb-1 text-blue-400 text-sm"></i>
+                <span class="font-bold text-white block">RSI Scalp</span>
+                <span class="text-[10px] text-gray-400">Đỉnh / Đáy</span>
+              </button>
+
+              <button type="button" onclick="selectStrategy('EMA_CROSSOVER')" id="strat-EMA_CROSSOVER" class="strategy-card p-2 rounded-xl text-center text-xs transition-all">
+                <i class="fa-solid fa-arrow-trend-up block mb-1 text-emerald-400 text-sm"></i>
+                <span class="font-bold text-white block">EMA Cross</span>
+                <span class="text-[10px] text-gray-400">Xu Hướng Trend</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Bot Numerical Parameters Form -->
+          <div class="grid grid-cols-2 gap-2.5 mt-3 text-xs">
+            <div>
+              <label class="text-gray-400 block mb-1">Vốn mỗi lệnh (USDT):</label>
+              <input type="number" id="bot-amount" oninput="markBotDirty()" value="20" min="5" step="5" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-white font-mono focus:border-yellow-500 outline-none">
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Tần suất quét (giây):</label>
+              <input type="number" id="bot-interval" oninput="markBotDirty()" value="10" min="3" step="1" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-white font-mono focus:border-yellow-500 outline-none">
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Chốt Lời (TP %):</label>
+              <input type="number" id="bot-tp" oninput="markBotDirty()" value="3.0" min="0.5" step="0.5" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-emerald-400 font-mono focus:border-emerald-500 outline-none">
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Cắt Lỗ (SL %):</label>
+              <input type="number" id="bot-sl" oninput="markBotDirty()" value="1.5" min="0.5" step="0.5" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-red-400 font-mono focus:border-red-500 outline-none">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2.5 mt-3 text-xs">
+            <label class="text-gray-400">Trần tổng vốn bot (USDT)
+              <input id="bot-total-budget" type="number" min="5" step="1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
+            </label>
+            <label class="text-gray-400">Trần tổng lỗ tại SL (USDT)
+              <input id="bot-risk-budget" type="number" min="0.01" step="0.1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
+            </label>
+          </div>
+          <button onclick="saveBotConfig()" class="w-full mt-3 py-2 rounded-xl bg-[#232a3d] hover:bg-[#2e374f] text-white text-xs font-bold transition-colors flex items-center justify-center space-x-2">
+            <i class="fa-solid fa-floppy-disk text-yellow-400"></i>
+            <span>Lưu cấu hình <span class="selected-bot-label">Bot FUTURES</span></span>
+          </button>
+          </fieldset>
+
+          <!-- Live Bot Terminal Console -->
+          <div class="mt-3.5">
+            <div class="flex items-center justify-between text-[11px] text-gray-400 mb-1">
+              <span><i class="fa-solid fa-terminal mr-1 text-gray-500"></i> Nhật ký <span class="selected-bot-label">Bot FUTURES</span>:</span>
+              <span id="bot-last-check" class="font-mono text-gray-500">Chờ quét...</span>
+            </div>
+            <div id="bot-console-logs" class="terminal-box h-40 p-2.5 overflow-y-auto text-[11px] space-y-1 text-gray-300">
+              <div class="text-gray-500">// Hệ thống sẵn sàng. Bấm "KHỞI ĐỘNG" để bắt đầu quét watchlist.</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ================= MANUAL ORDER FORM ================= -->
+        <div class="card-glass p-5">
+          <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+            <div class="flex items-center space-x-3">
+              <div class="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                <i class="fa-solid fa-hand-pointer"></i>
+              </div>
+              <div>
+                <h3 class="text-sm md:text-base font-bold text-white flex items-center space-x-2">
+                  <span>Đặt Lệnh Bằng Tay</span>
+                  <span id="manual-market-tag" class="px-2 py-0.5 text-[10px] font-bold rounded bg-yellow-500/20 text-yellow-400">SPOT</span>
+                </h3>
+                <p class="text-xs text-gray-400">Đặt lệnh trực tiếp lên coin đang xem</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2.5 mt-3 text-xs">
+            <div>
+              <label class="text-gray-400 block mb-1">Loại lệnh:</label>
+              <select id="manual-order-type" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+                <option value="MARKET">MARKET (Khớp ngay)</option>
+                <option value="LIMIT">LIMIT (Chờ giá)</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1" id="manual-amount-label">Số tiền (USDT):</label>
+              <input type="number" id="manual-amount" value="20" min="5" step="5" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+            </div>
+          </div>
+
+          <label id="manual-leverage-row" class="block mt-2 text-xs text-gray-400">Đòn bẩy lệnh tay
+            <select id="manual-leverage" onchange="setLeverage(Number(this.value))" class="bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
+              <option>2</option><option>5</option><option selected>10</option><option>20</option><option>50</option>
+            </select>
+          </label>
+          <!-- Quick Balance Percentage Buttons -->
+          <div class="grid grid-cols-4 gap-1.5 mt-2 text-[11px]">
+            <button type="button" onclick="setManualPercent(0.1)" class="py-1 rounded bg-[#080a0f] border border-[#232a3d] hover:border-yellow-500 text-gray-300 font-mono">10%</button>
+            <button type="button" onclick="setManualPercent(0.25)" class="py-1 rounded bg-[#080a0f] border border-[#232a3d] hover:border-yellow-500 text-gray-300 font-mono">25%</button>
+            <button type="button" onclick="setManualPercent(0.5)" class="py-1 rounded bg-[#080a0f] border border-[#232a3d] hover:border-yellow-500 text-gray-300 font-mono">50%</button>
+            <button type="button" onclick="setManualPercent(1.0)" class="py-1 rounded bg-[#080a0f] border border-[#232a3d] hover:border-yellow-500 text-gray-300 font-mono">100%</button>
+          </div>
+
+          <div id="limit-price-group" class="hidden mt-2 text-xs">
+            <label class="text-gray-400 block mb-1">Mức giá đặt LIMIT:</label>
+            <input type="number" id="manual-limit-price" placeholder="Nhập mức giá muốn chờ" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+          </div>
+
+          <!-- Spot Action Buttons -->
+          <div id="spot-order-buttons" class="grid grid-cols-2 gap-2.5 mt-3.5">
+            <button onclick="submitManualOrder('BUY')" class="py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-xs text-black transition-all flex items-center justify-center space-x-1.5 shadow">
+              <i class="fa-solid fa-arrow-up"></i>
+              <span>MUA (SPOT)</span>
+            </button>
+            <button onclick="submitManualOrder('SELL')" class="py-2.5 rounded-xl bg-red-500 hover:bg-red-400 font-bold text-xs text-white transition-all flex items-center justify-center space-x-1.5 shadow">
+              <i class="fa-solid fa-arrow-down"></i>
+              <span>BÁN (SPOT)</span>
+            </button>
+          </div>
+
+          <!-- Futures Action Buttons -->
+          <div id="futures-order-buttons" class="hidden grid grid-cols-2 gap-2.5 mt-3.5">
+            <button onclick="submitFuturesOrder('BUY')" class="py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-xs text-black transition-all flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-500/20">
+              <i class="fa-solid fa-arrow-trend-up"></i>
+              <span>MỞ VỊ THẾ LONG</span>
+            </button>
+            <button onclick="submitFuturesOrder('SELL')" class="py-2.5 rounded-xl bg-red-500 hover:bg-red-400 font-bold text-xs text-white transition-all flex items-center justify-center space-x-1.5 shadow-lg shadow-red-500/20">
+              <i class="fa-solid fa-arrow-trend-down"></i>
+              <span>MỞ VỊ THẾ SHORT</span>
+            </button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 2: ACTIVE POSITIONS DASHBOARD (FULL WIDTH) -->
+    <!-- ======================================================== -->
+    <div id="tab-content-positions" class="hidden space-y-5">
+      
+      <!-- Top Metrics Strip for Active Positions -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="card-glass p-4 border-l-4 border-l-emerald-500">
+          <div class="text-xs text-gray-400 font-semibold uppercase">Lãi / Lỗ Đang Mở (Unrealized PnL)</div>
+          <div class="text-2xl font-bold font-mono text-emerald-400 mt-1" id="dash-unrealized-pnl">+$0.00</div>
+          <div class="text-[11px] text-gray-500 mt-0.5">Cập nhật theo giá thị trường thời gian thực</div>
+        </div>
+
+        <div class="card-glass p-4 border-l-4 border-l-purple-500">
+          <div class="text-xs text-gray-400 font-semibold uppercase">Số Lượng Vị Thế Đang Giữ</div>
+          <div class="text-2xl font-bold font-mono text-white mt-1" id="dash-positions-count">0 / 3</div>
+          <div class="text-[11px] text-purple-400 mt-0.5" id="dash-positions-capacity">Còn trống 3 vị thế</div>
+        </div>
+
+        <div class="card-glass p-4 border-l-4 border-l-yellow-500">
+          <div class="text-xs text-gray-400 font-semibold uppercase">Tổng Ký Quỹ Đang Dùng (Margin)</div>
+          <div class="text-2xl font-bold font-mono text-yellow-400 mt-1" id="dash-margin-used">$0.00</div>
+          <div class="text-[11px] text-gray-400 mt-0.5">Số vốn USDT đang phân bổ trong các lệnh</div>
+        </div>
+
+        <div class="card-glass p-4 border-l-4 border-l-blue-500">
+          <div class="text-xs text-gray-400 font-semibold uppercase">PnL trước phí/funding Tích Lũy Đã Đóng</div>
+          <div class="text-2xl font-bold font-mono text-emerald-400 mt-1" id="dash-realized-pnl">+$0.00</div>
+          <div class="text-[11px] text-gray-400 mt-0.5" id="dash-winrate-text">Winrate: 0.0%</div>
+        </div>
+      </div>
+
+      <!-- Main Positions Table Card -->
+      <div class="card-glass p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#232a3d]">
+          <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold">
+              <i class="fa-solid fa-list-check"></i>
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-white">Vị thế đang mở · <span class="selected-bot-label">Bot FUTURES</span></h3>
+              <p class="text-xs text-gray-400">Kiểm soát PnL, chốt lời, cắt lỗ và đóng từng lệnh hoặc đóng hàng loạt</p>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <select id="positions-bot-select" aria-label="Bot quản lý vị thế" onchange="selectBot(this.value)" class="bg-[#080a0f] border border-[#232a3d] rounded-lg p-2 text-white text-xs"><option value="SPOT">Bot SPOT</option><option value="FUTURES" selected>Bot FUTURES</option></select>
+            <button onclick="fetchBotStatus()" class="px-3 py-1.5 rounded-lg bg-[#232a3d] hover:bg-[#2e374f] text-gray-300 text-xs font-semibold transition-all">
+              <i class="fa-solid fa-arrows-rotate mr-1"></i> Làm mới
+            </button>
+            <button onclick="closeAllPositions()" class="px-4 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-xs transition-all shadow-lg shadow-red-500/20 flex items-center space-x-1.5">
+              <i class="fa-solid fa-bolt-lightning text-yellow-300"></i>
+              <span>Đóng tất cả của bot đang chọn</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Position Table Container -->
+        <div class="overflow-x-auto mt-4">
+          <table class="w-full text-left text-xs text-gray-300">
+            <thead class="bg-[#080a0f] text-gray-400 font-mono border-b border-[#232a3d]">
+              <tr>
+                <th class="p-3">Cặp Coin</th>
+                <th class="p-3">Thị Trường & Phe</th>
+                <th class="p-3">Giá Vào (Entry)</th>
+                <th class="p-3">Giá Hiện Tại (Mark)</th>
+                <th class="p-3">Khối Lượng / Ký Quỹ</th>
+                <th class="p-3">Mục Tiêu TP / SL</th>
+                <th class="p-3">Lãi/Lỗ & ROE (%)</th>
+                <th class="p-3 text-right">Thao Tác</th>
+              </tr>
+            </thead>
+            <tbody id="full-positions-table-body" class="divide-y divide-[#232a3d] font-mono">
+              <tr>
+                <td colspan="8" class="text-center py-12 text-gray-500 font-sans">
+                  <i class="fa-solid fa-inbox text-3xl mb-2 text-gray-600 block"></i>
+                  Không có vị thế nào đang mở. Bot sẽ tự động mở lệnh khi quét thấy tín hiệu đẹp.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 3: TRADING ACADEMY & RULES -->
+    <!-- ======================================================== -->
+    <div id="tab-content-academy" class="hidden space-y-6">
+      
+      <!-- Academy Hero Banner -->
+      <div class="card-glass p-6 md:p-8 bg-gradient-to-r from-[#151a26] via-[#1c2233] to-[#0f131c] border-yellow-500/30">
+        <div class="max-w-4xl">
+          <span class="px-2.5 py-1 rounded-md bg-yellow-500/20 text-yellow-400 font-bold text-xs border border-yellow-500/30 uppercase tracking-wider">Học Viện Thực Chiến & Luật Sàn</span>
+          <h1 class="text-2xl md:text-3xl font-extrabold text-white mt-2 leading-tight">Cẩm Nang Làm Chủ Trading Crypto & Quy Tắc Sàn Binance</h1>
+          <p class="text-gray-300 text-xs md:text-sm mt-2 leading-relaxed">
+            Học từ số 0 đến làm chủ hệ thống: Đọc nến, 4 chỉ báo kỹ thuật cốt lõi, quản trị vốn Futures và toàn bộ quy tắc sàn (Min Notional, Bước nhảy Lot, Funding Rate, và từ điển mã lỗi).
+          </p>
+        </div>
+      </div>
+
+      <!-- Curriculum Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Left Sidebar: Lessons Index -->
+        <div class="lg:col-span-4 space-y-2">
+          <div class="text-xs font-bold text-gray-400 uppercase tracking-wider px-2 mb-1">Mục Lục Khóa Học:</div>
+
+          <button onclick="switchLesson(1)" id="lesson-btn-1" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass border-l-4 border-l-yellow-500 hover:bg-[#1c2233] transition-all flex items-center space-x-3">
+            <span class="w-7 h-7 rounded-lg bg-yellow-500/20 text-yellow-400 font-bold text-xs flex items-center justify-center">1</span>
+            <div>
+              <div class="font-bold text-sm text-white">Nhập Môn & Thuật Ngữ Cốt Lõi</div>
+              <div class="text-xs text-gray-400">Spot vs Futures, Market vs Limit</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(2)" id="lesson-btn-2" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3">
+            <span class="w-7 h-7 rounded-lg bg-gray-700 text-gray-300 font-bold text-xs flex items-center justify-center">2</span>
+            <div>
+              <div class="font-bold text-sm text-white">Nghệ Thuật Đọc Nến Nhật</div>
+              <div class="text-xs text-gray-400">Pinbar, Engulfing, Hỗ trợ / Kháng cự</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(3)" id="lesson-btn-3" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3">
+            <span class="w-7 h-7 rounded-lg bg-gray-700 text-gray-300 font-bold text-xs flex items-center justify-center">3</span>
+            <div>
+              <div class="font-bold text-sm text-white">Làm Chủ 4 Chỉ Báo Kỹ Thuật</div>
+              <div class="text-xs text-gray-400">RSI, EMA 9/21, MACD, Bollinger Bands</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(4)" id="lesson-btn-4" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3">
+            <span class="w-7 h-7 rounded-lg bg-gray-700 text-gray-300 font-bold text-xs flex items-center justify-center">4</span>
+            <div>
+              <div class="font-bold text-sm text-white">Quản Trị Vốn & Máy Tính Vị Thế</div>
+              <div class="text-xs text-gray-400">Quy tắc 1-2%, Tỷ lệ R:R 1:2 & Position Calculator</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(5)" id="lesson-btn-5" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3">
+            <span class="w-7 h-7 rounded-lg bg-gray-700 text-gray-300 font-bold text-xs flex items-center justify-center">5</span>
+            <div>
+              <div class="font-bold text-sm text-white">Tâm Lý Giao Dịch & Bot Kỷ Luật</div>
+              <div class="text-xs text-gray-400">Khắc chế FOMO, Gồng lỗ & Tự động hóa</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(6)" id="lesson-btn-6" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3 border border-purple-500/30">
+            <span class="w-7 h-7 rounded-lg bg-purple-500/20 text-purple-400 font-bold text-xs flex items-center justify-center">6</span>
+            <div>
+              <div class="font-bold text-sm text-purple-300">Bí Kíp Đánh Futures & Đòn Bẩy</div>
+              <div class="text-xs text-gray-400">Long/Short 2 chiều, Tránh bị thanh lý</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(7)" id="lesson-btn-7" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3 border border-yellow-500/30">
+            <span class="w-7 h-7 rounded-lg bg-yellow-500/20 text-yellow-400 font-bold text-xs flex items-center justify-center">7</span>
+            <div>
+              <div class="font-bold text-sm text-yellow-300">Luật Sàn Binance & Mã Lỗi</div>
+              <div class="text-xs text-gray-400">Min Notional, Lot Size, Mark Price & Codes</div>
+            </div>
+          </button>
+        </div>
+
+        <!-- Right Content: Lesson Body -->
+        <div class="lg:col-span-8 card-glass p-6 md:p-8">
+          
+          <!-- LESSON 1 -->
+          <div id="lesson-content-1" class="lesson-body space-y-5">
+            <div class="border-b border-[#232a3d] pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 1</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Khái Niệm Cốt Lõi Cho Người Mới Bắt Đầu</h2>
+            </div>
+
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-2">
+                <div class="bg-[#080a0f] p-4 rounded-xl border border-[#232a3d]">
+                  <h4 class="font-bold text-yellow-400 mb-2"><i class="fa-solid fa-coins mr-2"></i> Spot (Giao Ngay)</h4>
+                  <p class="text-xs text-gray-400">Mua đứt bán đoạn. Không đòn bẩy, không lo bị thanh lý tài khoản. Phù hợp nắm giữ trung và dài hạn.</p>
+                </div>
+                <div class="bg-[#080a0f] p-4 rounded-xl border border-purple-500/40">
+                  <h4 class="font-bold text-purple-400 mb-2"><i class="fa-solid fa-bolt mr-2"></i> Futures (Đòn Bẩy & Phái Sinh)</h4>
+                  <p class="text-xs text-gray-400">Kiếm tiền 2 chiều: Giá tăng thì đánh <b>LONG</b>, giá giảm thì đánh <b>SHORT</b>. Cho phép dùng đòn bẩy (ví dụ 10x) để nhân biên độ lợi nhuận.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LESSON 2 -->
+          <div id="lesson-content-2" class="lesson-body hidden space-y-5">
+            <div class="border-b border-[#232a3d] pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 2</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Nghệ Thuật Đọc Nến Nhật & Vùng Giá Quan Trọng</h2>
+            </div>
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <p>Mỗi cây nến phản ánh tâm lý cung - cầu của thị trường: Nến Pinbar/Hammer từ chối giá thấp, nến Bullish Engulfing nhấn chìm tăng, nến Shooting Star cảnh báo xả đỉnh.</p>
+            </div>
+          </div>
+
+          <!-- LESSON 3 -->
+          <div id="lesson-content-3" class="lesson-body hidden space-y-5">
+            <div class="border-b border-[#232a3d] pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 3</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Làm Chủ 4 Chỉ Báo Kỹ Thuật Đỉnh Cao</h2>
+            </div>
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <p><b>RSI:</b> Quá bán (&lt;30) canh Long, Quá mua (&gt;70) canh Short.<br>
+              <b>EMA 9 & 21:</b> Golden Cross cắt lên canh Long, Death Cross cắt xuống canh Short.<br>
+              <b>MACD:</b> Xác nhận xung lượng động lượng.<br>
+              <b>Bollinger Bands:</b> Đo lường biến động và độ nén giá.</p>
+            </div>
+          </div>
+
+          <!-- LESSON 4 (Calculator) -->
+          <div id="lesson-content-4" class="lesson-body hidden space-y-5">
+            <div class="border-b border-[#232a3d] pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 4</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Quản Trị Vốn & Máy Tính Vị Thế</h2>
+            </div>
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <div class="bg-[#080a0f] p-5 rounded-2xl border border-yellow-500/40">
+                <h4 class="text-sm md:text-base font-bold text-yellow-400 mb-3"><i class="fa-solid fa-calculator mr-2"></i> Máy Tính Kế Hoạch Vào Lệnh & R:R</h4>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <label class="text-gray-400 block mb-1">Vốn ví (USDT):</label>
+                    <input type="number" id="calc-balance" value="5000" class="w-full bg-[#151a26] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+                  </div>
+                  <div>
+                    <label class="text-gray-400 block mb-1">% Rủi ro tối đa:</label>
+                    <select id="calc-risk-pct" class="w-full bg-[#151a26] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+                      <option value="1">1.0% (Rất an toàn)</option>
+                      <option value="2" selected>2.0% (Tiêu chuẩn)</option>
+                      <option value="5">5.0% (Mạo hiểm)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-gray-400 block mb-1">Giá vào lệnh (Entry):</label>
+                    <input type="number" id="calc-entry" value="73500" class="w-full bg-[#151a26] border border-[#232a3d] rounded-lg px-3 py-2 text-white font-mono outline-none">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs mt-3">
+                  <div>
+                    <label class="text-gray-400 block mb-1">Mức Cắt Lỗ (SL):</label>
+                    <input type="number" id="calc-sl" value="72000" class="w-full bg-[#151a26] border border-red-500/50 rounded-lg px-3 py-2 text-red-400 font-mono outline-none">
+                  </div>
+                  <div>
+                    <label class="text-gray-400 block mb-1">Mức Chốt Lời (TP):</label>
+                    <input type="number" id="calc-tp" value="76500" class="w-full bg-[#151a26] border border-emerald-500/50 rounded-lg px-3 py-2 text-emerald-400 font-mono outline-none">
+                  </div>
+                </div>
+
+                <button onclick="calculatePositionSize()" class="w-full mt-3.5 py-2.5 rounded-xl bg-yellow-500 hover:bg-yellow-400 text-black font-bold text-xs transition-all">
+                  TÍNH TOÁN KẾ HOẠCH
+                </button>
+
+                <div id="calc-results" class="mt-3.5 p-3.5 rounded-xl bg-[#151a26] border border-[#232a3d] grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+                  <div>
+                    <span class="text-gray-400 block">Rủi ro tối đa:</span>
+                    <span id="res-risk-usdt" class="text-red-400 font-bold text-sm">$100.00</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-400 block">Khối lượng mua:</span>
+                    <span id="res-qty" class="text-white font-bold text-sm">0.0667 BTC</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-400 block">Tổng vốn cần:</span>
+                    <span id="res-total-cost" class="text-yellow-400 font-bold text-sm">$4,900.00</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-400 block">Tỷ lệ Risk:Reward:</span>
+                    <span id="res-rr-ratio" class="text-emerald-400 font-bold text-sm">1 : 2.0 (Đạt Chuẩn)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LESSON 5 -->
+          <div id="lesson-content-5" class="lesson-body hidden space-y-5">
+            <div class="border-b border-[#232a3d] pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 5</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Tâm Lý Giao Dịch & Sức Mạnh Của Trading Bot</h2>
+            </div>
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <p>Bot giúp loại bỏ hoàn toàn 4 kẻ thù: FOMO (mua đỉnh), Sợ hãi (bán đáy), Revenge Trading (trả thù sàn) và Gồng lỗ!</p>
+            </div>
+          </div>
+
+          <!-- LESSON 6 -->
+          <div id="lesson-content-6" class="lesson-body hidden space-y-5">
+            <div class="border-b border-purple-500/40 pb-3">
+              <span class="text-xs font-bold text-purple-400 uppercase">Bài Học Đặc Biệt 6</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Bí Kíp Đánh Futures & Kiểm Soát Đòn Bẩy</h2>
+            </div>
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <div class="p-3.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs leading-relaxed">
+                <i class="fa-solid fa-bolt mr-1"></i> <strong>Đòn bẩy là con dao hai lưỡi:</strong> Đòn bẩy 10x giúp bạn lãi gấp 10 lần khi giá đi đúng hướng, nhưng cũng khiến bạn lỗ gấp 10 lần nếu giá đi ngược hướng!
+              </div>
+
+              <h3 class="text-sm md:text-base font-bold text-white mt-3">1. Cơ Chế Long & Short Trong Futures</h3>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-emerald-500/30">
+                  <h4 class="font-bold text-emerald-400 mb-1">Vị thế LONG (Đánh lên)</h4>
+                  <p class="text-xs text-gray-400">Bạn kỳ vọng giá sẽ tăng. Nếu BTC tăng từ $70,000 lên $73,500 (+5%), với đòn bẩy 10x, lợi nhuận thực tế (ROE) của bạn là <b>+50%</b> trên số vốn ký quỹ!</p>
+                </div>
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-red-500/30">
+                  <h4 class="font-bold text-red-400 mb-1">Vị thế SHORT (Bán khống - Đánh xuống)</h4>
+                  <p class="text-xs text-gray-400">Bạn kỳ vọng giá sẽ giảm. Nếu BTC giảm từ $73,500 xuống $70,000 (-5%), với đòn bẩy 10x, bạn kiếm được <b>+50% lợi nhuận</b> ngay trong chiều giảm!</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LESSON 7 (RULES OF SPOT & FUTURES) -->
+          <div id="lesson-content-7" class="lesson-body hidden space-y-5">
+            <div class="border-b border-yellow-500/40 pb-3">
+              <span class="text-xs font-bold text-yellow-400 uppercase">Bài Học 7 · Toàn Tập Quy Tắc Sàn</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Luật Sàn Binance: Toàn Tập Quy Tắc Spot & Futures</h2>
+              <p class="text-xs text-gray-400 mt-1">Hiểu rõ các bộ lọc kỹ thuật (Filters), cơ chế tính phí và thanh lý để tránh lỗi đặt lệnh và bảo vệ tài khoản.</p>
+            </div>
+
+            <!-- SPOT RULES -->
+            <div class="space-y-3">
+              <div class="flex items-center space-x-2 text-sm font-bold text-yellow-400">
+                <i class="fa-solid fa-coins"></i>
+                <span>1. CÁC QUY TẮC BẮT BUỘC KHI GIAO DỊCH SPOT (GIAO NGAY)</span>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <div class="text-yellow-400 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2"></span> Min Notional (Giá trị lệnh tối thiểu)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Mỗi lệnh Mua hoặc Bán trên Binance Spot bắt buộc phải có giá trị tối thiểu là <b>5 USDT</b> (một số cặp là 10 USDT). Nếu bạn đặt lệnh mua 2$ hay 3$, sàn sẽ từ chối ngay với mã lỗi <code>-1013 MIN_NOTIONAL</code>.
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <div class="text-yellow-400 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2"></span> Lot Size & Step Size (Bước nhảy số lượng)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Sàn quy định độ chính xác thập phân tối đa cho mỗi đồng coin:
+                    <br>• BTC: <code>stepSize = 0.00001 BTC</code> (tối đa 5 số thập phân).
+                    <br>• ETH: <code>stepSize = 0.0001 ETH</code> (4 số thập phân).
+                    <br>• DOGE: <code>stepSize = 1.0</code> (phải là số nguyên, không được mua lẻ 12.5 DOGE).
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <div class="text-yellow-400 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2"></span> Cơ chế trừ phí từ tài sản nhận (Trading Fee)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Phí giao dịch tiêu chuẩn là 0.1%. Khi bạn mua BTC bằng USDT, phí 0.1% sẽ <b>được trừ thẳng vào số BTC bạn nhận về</b> ví! Ví dụ: Mua 0.00027 BTC thì thực nhận là 0.00026973 BTC. Đây là lý do bot cần kiểm tra số dư thực tế trước khi bán để không bị lỗi thiếu số dư.
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <div class="text-yellow-400 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2"></span> Phần dư lẻ (Crypto Dust)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Sau khi bán, trong ví thường còn sót lại một lượng coin siêu nhỏ (ví dụ 0.000009 BTC trị giá ~0.06$). Vì nhỏ hơn 5 USDT nên bạn không thể bán trực tiếp được, nhưng Binance có tính năng <i>"Đổi số dư nhỏ sang BNB"</i> để gom gọn ví.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- FUTURES RULES -->
+            <div class="space-y-3 pt-3 border-t border-[#232a3d]">
+              <div class="flex items-center space-x-2 text-sm font-bold text-purple-400">
+                <i class="fa-solid fa-bolt"></i>
+                <span>2. CÁC QUY TẮC SINH TỬ KHI GIAO DỊCH FUTURES (PHÁI SINH)</span>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-purple-500/30">
+                  <div class="text-purple-300 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-purple-400 mr-2"></span> Cross Margin vs Isolated Margin
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    • <b>Cross (Chéo):</b> Toàn bộ số dư ví Futures được dùng chung để gánh lỗ cho tất cả các vị thế.<br>
+                    • <b>Isolated (Cô lập):</b> Khóa riêng một số tiền nhất định cho vị thế đó. Nếu bị thanh lý, bạn chỉ mất đúng số tiền ký quỹ đó.
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-purple-500/30">
+                  <div class="text-purple-300 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-purple-400 mr-2"></span> Giá Đánh Dấu (Mark Price) vs Giá Gần Nhất
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Binance tính toán Lãi/Lỗ và kích hoạt <b>Thanh lý tài khoản dựa trên Mark Price</b> (chỉ số giá trung bình từ nhiều sàn lớn hàng đầu thế giới). Điều này giúp bảo vệ bạn khỏi các đợt "rút râu quét Stop Loss" do cá mập thao túng.
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-purple-500/30">
+                  <div class="text-purple-300 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-purple-400 mr-2"></span> Phí Funding Rate (Mỗi 8 tiếng một lần)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Diễn ra vào các mốc <b>07:00, 15:00 và 23:00 (Giờ VN)</b> để neo giá Futures sát với giá Spot:<br>
+                    • <b>Funding dương (+):</b> Phe Long phải trả phí cho phe Short.<br>
+                    • <b>Funding âm (-):</b> Phe Short phải trả phí cho phe Long.
+                  </p>
+                </div>
+
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-purple-500/30">
+                  <div class="text-purple-300 font-bold mb-1 flex items-center">
+                    <span class="w-2 h-2 rounded-full bg-purple-400 mr-2"></span> Cờ Reduce-Only (Chỉ Giảm Vị Thế)
+                  </div>
+                  <p class="text-gray-300 leading-relaxed">
+                    Khi bạn đang có vị thế Long và muốn đặt lệnh chốt lời hay cắt lỗ bằng lệnh Bán, cờ <code>reduceOnly=True</code> sẽ đảm bảo lệnh này <b>chỉ có quyền đóng vị thế cũ</b>, không bao giờ vô tình mở ra một lệnh Short ngược lại!
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- ERROR CODES DICTIONARY -->
+            <div class="space-y-3 pt-3 border-t border-[#232a3d]">
+              <div class="flex items-center space-x-2 text-sm font-bold text-red-400">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>3. TỪ ĐIỂN CÁC MÃ LỖI SÀN THƯỜNG GẶP (BINANCE ERROR CODES)</span>
+              </div>
+
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono border border-[#232a3d] rounded-xl overflow-hidden">
+                  <thead class="bg-[#080a0f] text-gray-400">
+                    <tr>
+                      <th class="p-2.5">Mã Lỗi (Code)</th>
+                      <th class="p-2.5">Thông Báo Sàn</th>
+                      <th class="p-2.5">Nguyên Nhân</th>
+                      <th class="p-2.5">Cách Khắc Phục</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-[#232a3d] text-gray-300 font-sans">
+                    <tr class="hover:bg-[#151a26]">
+                      <td class="p-2.5 font-mono font-bold text-red-400">-1013</td>
+                      <td class="p-2.5 font-mono text-gray-400">Filter failure: MIN_NOTIONAL</td>
+                      <td class="p-2.5">Giá trị lệnh đặt nhỏ hơn mức tối thiểu 5 USDT.</td>
+                      <td class="p-2.5 text-emerald-400">Tăng số tiền lệnh lên tối thiểu từ 5$ - 10$ trở lên.</td>
+                    </tr>
+                    <tr class="hover:bg-[#151a26]">
+                      <td class="p-2.5 font-mono font-bold text-red-400">-1013</td>
+                      <td class="p-2.5 font-mono text-gray-400">Filter failure: LOT_SIZE</td>
+                      <td class="p-2.5">Số lượng coin không khớp với bước nhảy stepSize.</td>
+                      <td class="p-2.5 text-emerald-400">Dùng hàm làm tròn xuống theo đúng stepSize của coin.</td>
+                    </tr>
+                    <tr class="hover:bg-[#151a26]">
+                      <td class="p-2.5 font-mono font-bold text-red-400">-2010</td>
+                      <td class="p-2.5 font-mono text-gray-400">Account has insufficient balance</td>
+                      <td class="p-2.5">Số dư khả dụng trong ví không đủ (thường do bị trừ phí sàn).</td>
+                      <td class="p-2.5 text-emerald-400">Lấy trực tiếp số dư thực tế trong ví trước khi gửi lệnh bán.</td>
+                    </tr>
+                    <tr class="hover:bg-[#151a26]">
+                      <td class="p-2.5 font-mono font-bold text-red-400">-1021</td>
+                      <td class="p-2.5 font-mono text-gray-400">Timestamp ahead of server time</td>
+                      <td class="p-2.5">Đồng hồ máy tính bị lệch quá 1 giây so với máy chủ Binance.</td>
+                      <td class="p-2.5 text-emerald-400">Đồng bộ lại serverTime và tăng recvWindow lên 10000ms.</td>
+                    </tr>
+                    <tr class="hover:bg-[#151a26]">
+                      <td class="p-2.5 font-mono font-bold text-red-400">-2021</td>
+                      <td class="p-2.5 font-mono text-gray-400">Order would immediately trigger</td>
+                      <td class="p-2.5">Giá kích hoạt Stop Loss đặt ngược chiều so với giá hiện tại.</td>
+                      <td class="p-2.5 text-emerald-400">Kiểm tra lại giá kích hoạt: Long phải đặt SL dưới giá vào.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB 4: HISTORY & PERFORMANCE -->
+    <!-- ======================================================== -->
+    <div id="tab-content-history" class="hidden space-y-5">
+      
+      <!-- Metrics Overview Cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400 uppercase tracking-wider">PnL <span class="selected-bot-label">Bot FUTURES</span> trước phí/funding</div>
+          <div class="text-2xl font-bold font-mono text-emerald-400 mt-2 flex items-center" id="stat-total-pnl">
+            +$0.00
+          </div>
+          <div class="text-[11px] text-gray-500 mt-1">Lợi nhuận tích lũy trên tài khoản demo</div>
+        </div>
+
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400 uppercase tracking-wider">Tỷ Lệ Thắng (Winrate)</div>
+          <div class="text-2xl font-bold font-mono text-yellow-400 mt-2" id="stat-winrate">
+            0.0%
+          </div>
+          <div class="text-[11px] text-gray-500 mt-1" id="stat-win-loss-text">0 lệnh thắng / 0 lệnh thua</div>
+        </div>
+
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400 uppercase tracking-wider" id="stat-wallet-label">Số Dư Ký Quỹ Khả Dụng</div>
+          <div class="text-2xl font-bold font-mono text-white mt-2" id="stat-usdt">
+            5,000.00
+          </div>
+          <div class="text-[11px] text-emerald-400 mt-1">Sẵn sàng để bot giao dịch</div>
+        </div>
+
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400 uppercase tracking-wider">Bot đang xem thống kê</div>
+          <div class="text-2xl font-bold font-mono text-purple-400 mt-2" id="stat-current-mode">
+            FUTURES 10x
+          </div>
+          <div class="text-[11px] text-gray-400 mt-1">2 Chiều Long & Short</div>
+        </div>
+      </div>
+
+      <!-- Open Orders on Binance Demo -->
+      <div class="card-glass p-5">
+        <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+          <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-clock-rotate-left text-yellow-400"></i>
+            <h3 class="text-sm md:text-base font-bold text-white">Lệnh Chờ Khớp Trên Sàn (Open Orders)</h3>
+          </div>
+          <button onclick="fetchOpenOrders()" class="text-xs bg-[#232a3d] hover:bg-[#2e374f] text-gray-300 px-3 py-1.5 rounded-lg transition-colors">
+            <i class="fa-solid fa-arrows-rotate mr-1"></i> Làm mới
+          </button>
+        </div>
+
+        <div class="overflow-x-auto mt-3">
+          <table class="w-full text-left text-xs text-gray-300">
+            <thead class="bg-[#080a0f] text-gray-400 font-mono">
+              <tr>
+                <th class="p-3">Order ID</th>
+                <th class="p-3">Thị trường</th>
+                <th class="p-3">Cặp tiền</th>
+                <th class="p-3">Phe</th>
+                <th class="p-3">Giá đặt</th>
+                <th class="p-3">Khối lượng</th>
+                <th class="p-3">Đã khớp</th>
+                <th class="p-3 text-right">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="open-orders-table-body" class="divide-y divide-[#232a3d] font-mono">
+              <tr>
+                <td colspan="8" class="text-center py-6 text-gray-500 font-sans">Không có lệnh nào đang chờ khớp.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recent Closed Trades History -->
+      <div class="card-glass p-5">
+        <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+          <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-receipt text-emerald-400"></i>
+            <h3 class="text-sm md:text-base font-bold text-white">Lịch Sử Giao Dịch Đã Khớp (Executed Trades)</h3>
+          </div>
+          <button onclick="fetchTradeHistory()" class="text-xs bg-[#232a3d] hover:bg-[#2e374f] text-gray-300 px-3 py-1.5 rounded-lg transition-colors">
+            <i class="fa-solid fa-arrows-rotate mr-1"></i> Làm mới
+          </button>
+        </div>
+
+        <div class="overflow-x-auto mt-3">
+          <table class="w-full text-left text-xs text-gray-300">
+            <thead class="bg-[#080a0f] text-gray-400 font-mono">
+              <tr>
+                <th class="p-3">Thời gian</th>
+                <th class="p-3">Thị trường</th>
+                <th class="p-3">Cặp tiền</th>
+                <th class="p-3">Giá vào / ra</th>
+                <th class="p-3">Khối lượng</th>
+                <th class="p-3">Lãi / Lỗ ($)</th>
+                <th class="p-3">ROE (%)</th>
+                <th class="p-3">Phe / Lý do</th>
+              </tr>
+            </thead>
+            <tbody id="trades-table-body" class="divide-y divide-[#232a3d] font-mono">
+              <tr>
+                <td colspan="8" class="text-center py-6 text-gray-500 font-sans">Chưa có giao dịch nào được ghi nhận.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Searchable Coin Modal Popup (500+ Coins) -->
+  <div id="coin-search-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm hidden">
+    <div class="card-glass w-full max-w-lg p-5 md:p-6 mx-4 max-h-[85vh] flex flex-col shadow-2xl border-yellow-500/30">
+      <div class="flex items-center justify-between pb-3 border-b border-[#232a3d]">
+        <h3 class="text-sm md:text-base font-bold text-white flex items-center">
+          <i class="fa-solid fa-magnifying-glass text-yellow-400 mr-2"></i>
+          <span>Tìm & Chọn Cặp Tiền (500+ Coin Binance Demo)</span>
+        </h3>
+        <button onclick="toggleCoinModal()" class="text-gray-400 hover:text-white text-lg p-1">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Search Input -->
+      <div class="mt-3.5 relative">
+        <i class="fa-solid fa-search absolute left-3.5 top-3.5 text-gray-400 text-sm"></i>
+        <input type="text" id="coin-search-input" oninput="filterCoinList()" placeholder="Nhập mã coin (ví dụ: SOL, SUI, NEAR, PEPE, SHIB...)" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-xl pl-10 pr-4 py-2.5 text-white text-sm outline-none focus:border-yellow-500 font-mono">
+      </div>
+
+      <!-- Quick Category Filter Pills -->
+      <div class="flex items-center space-x-1.5 mt-3 text-xs overflow-x-auto pb-1">
+        <button onclick="filterCategory('ALL')" class="cat-btn px-3 py-1 rounded-lg bg-yellow-500 text-black font-bold whitespace-nowrap" data-cat="ALL">Tất cả</button>
+        <button onclick="filterCategory('L1')" class="cat-btn px-3 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white whitespace-nowrap" data-cat="L1">Layer 1</button>
+        <button onclick="filterCategory('DEFI')" class="cat-btn px-3 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white whitespace-nowrap" data-cat="DEFI">DeFi</button>
+        <button onclick="filterCategory('MEME')" class="cat-btn px-3 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white whitespace-nowrap" data-cat="MEME">Meme Coins</button>
+        <button onclick="filterCategory('AI')" class="cat-btn px-3 py-1 rounded-lg bg-[#080a0f] border border-[#232a3d] text-gray-300 hover:text-white whitespace-nowrap" data-cat="AI">AI & Web3</button>
+      </div>
+
+      <!-- Scrollable Coin List -->
+      <div id="coin-list-container" class="mt-3.5 overflow-y-auto flex-1 divide-y divide-[#232a3d] max-h-96 pr-1 font-mono text-xs">
+        <div class="p-4 text-center text-gray-400">Đang tải danh sách 500+ cặp coin...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="bg-[#0f131c] border-t border-[#232a3d] px-4 md:px-6 py-3.5 mt-auto">
+    <div class="max-w-[1720px] mx-auto flex flex-wrap items-center justify-between text-xs text-gray-400 gap-3">
+      <div class="flex items-center space-x-2">
+        <span class="w-2 h-2 rounded-full bg-yellow-400"></span>
+        <span>Binance Spot & Futures Demo | Dữ liệu cập nhật qua REST API</span>
+      </div>
+      <div>
+        Giao dịch mô phỏng bằng tài sản Demo • Kết quả thử nghiệm không bảo đảm hiệu quả thực tế
+      </div>
+    </div>
+  </footer>
+
+  <!-- App JavaScript Modules -->
+  <script src="/static/js/chart.js"></script>
+  <script src="/static/js/academy.js"></script>
+  <script src="/static/js/app.js?v=3.0.0"></script>
+</body>
+</html>
