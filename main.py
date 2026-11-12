@@ -1,7 +1,10 @@
 import os
+import base64
+import binascii
+import secrets
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from math import isfinite
@@ -26,6 +29,32 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Binance Demo Trading & Academy Bot", version="3.0.0", lifespan=lifespan)
+
+# Optional HTTP Basic Auth: enabled only when both APP_USERNAME and APP_PASSWORD are set.
+_AUTH_USER = os.getenv("APP_USERNAME", "")
+_AUTH_PASS = os.getenv("APP_PASSWORD", "")
+_AUTH_EXEMPT = {"/healthz"}
+
+
+@app.middleware("http")
+async def basic_auth(request, call_next):
+    if not (_AUTH_USER and _AUTH_PASS) or request.url.path in _AUTH_EXEMPT:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
+        try:
+            user, _, password = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+        except (binascii.Error, UnicodeDecodeError):
+            user, password = "", ""
+        if secrets.compare_digest(user.encode(), _AUTH_USER.encode()) and \
+                secrets.compare_digest(password.encode(), _AUTH_PASS.encode()):
+            return await call_next(request)
+    return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Tracking-Trading"'})
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 
 @app.exception_handler(ValueError)

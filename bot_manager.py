@@ -94,4 +94,7 @@ class TradingBotManager:
         self.guard.release_process_lock()
 
 
-bot_manager = TradingBotManager()
+_state_dir = os.getenv("STATE_DIR")
+if _state_dir:
+    Path(_state_dir).mkdir(parents=True, exist_ok=True)
+bot_manager = TradingBotManager(_state_dir or None)

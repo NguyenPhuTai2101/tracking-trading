@@ -16,8 +16,8 @@ class Settings:
     FUTURES_BASE_URL: str = "https://demo-fapi.binance.com"
     
     # Web server settings
-    HOST: str = "127.0.0.1"
-    PORT: int = 8000
+    HOST: str = os.getenv("HOST", "127.0.0.1")
+    PORT: int = int(os.getenv("PORT", "8000"))
     
     # Bot default configs
     DEFAULT_SYMBOL: str = "BTCUSDT"
