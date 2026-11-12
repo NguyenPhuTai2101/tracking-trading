@@ -233,3 +233,14 @@ body {
 .glow-red {
   box-shadow: 0 0 20px -5px rgba(246, 70, 93, 0.25);
 }
+
+/* Backtest form */
+.bt-input {
+  background: #080a0f;
+  border: 1px solid #232a3d;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  color: #fff;
+  width: 100%;
+}
+.bt-input:focus { outline: none; border-color: #22d3ee; }

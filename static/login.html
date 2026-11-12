@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Đăng nhập · Trading Hub</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 16px; background: #080a0f; color: #f3f4f6;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .card {
+      width: 100%; max-width: 380px; background: #0f131c; border: 1px solid #232a3d;
+      border-radius: 16px; padding: 28px; box-shadow: 0 20px 50px rgba(0, 0, 0, .45);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+    .logo {
+      width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+      background: linear-gradient(135deg, #facc15, #d97706); color: #000; font-weight: 800; font-size: 20px;
+    }
+    h1 { font-size: 18px; margin: 0; }
+    .sub { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+    label { display: block; font-size: 12px; color: #9ca3af; margin: 14px 0 6px; }
+    input {
+      width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid #232a3d;
+      background: #080a0f; color: #fff; font-size: 14px;
+    }
+    input:focus { outline: none; border-color: #facc15; }
+    button {
+      width: 100%; margin-top: 20px; padding: 11px; border: 0; border-radius: 10px; cursor: pointer;
+      background: #facc15; color: #000; font-weight: 700; font-size: 14px;
+    }
+    button:hover { background: #fde047; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .error { min-height: 18px; margin-top: 12px; font-size: 12px; color: #f87171; }
+    .note { margin-top: 18px; font-size: 11px; color: #6b7280; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <div class="logo">₿</div>
+      <div>
+        <h1>Trading Hub</h1>
+        <div class="sub">Đăng nhập để quản lý bot và cấu hình</div>
+      </div>
+    </div>
+    <form id="login-form" autocomplete="on">
+      <label for="username">Tên đăng nhập</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Mật khẩu</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button id="submit" type="submit">Đăng nhập</button>
+      <div id="error" class="error" role="alert"></div>
+    </form>
+    <p class="note">Phiên đăng nhập giữ 7 ngày trên trình duyệt này. Sai 5 lần liên tiếp sẽ bị khóa 5 phút.</p>
+  </main>
+  <script>
+    const form = document.getElementById("login-form");
+    const error = document.getElementById("error");
+    const submit = document.getElementById("submit");
+    function nextPath() {
+      const next = new URLSearchParams(location.search).get("next") || "/";
+      // Only same-site relative paths: never redirect to another host.
+      return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+    }
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      submit.disabled = true;
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+        if (res.ok) {
+          location.replace(nextPath());
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        error.textContent = typeof data.detail === "string" ? data.detail : "Đăng nhập thất bại.";
+        document.getElementById("password").select();
+      } catch (err) {
+        error.textContent = "Không kết nối được máy chủ.";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    fetch("/api/auth/status").then(r => r.json()).then(s => {
+      if (!s.enabled || s.authenticated) location.replace(nextPath());
+    }).catch(() => {});
+  </script>
+</body>
+</html>

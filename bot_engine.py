@@ -15,6 +15,7 @@ from trading_rules import BotConfigRequest, validate_closed_candles
 from config import settings
 from binance_client import binance_client
 from indicators import analyze_market_signals
+from strategy import decide_entry, exit_prices
 
 STATE_FILE = str(Path(__file__).resolve().with_name("bot_state.json"))
 
@@ -694,42 +695,9 @@ class TradingBotEngine:
         if sym == self.symbol:
             self.last_signal = analysis
 
-        is_futures = (market == "FUTURES")
-        should_enter = False
-        direction = "LONG"
-        reason = ""
-
-        if self.strategy == "RSI_SCALPING":
-            if analysis["rsi"] <= 32:
-                should_enter = True
-                direction = "LONG"
-                reason = f"RSI Quá Bán ({analysis['rsi']:.1f} <= 32)"
-            elif is_futures and analysis["rsi"] >= 68:
-                should_enter = True
-                direction = "SHORT"
-                reason = f"RSI Quá Mua ({analysis['rsi']:.1f} >= 68) - Vào vị thế SHORT"
-
-        elif self.strategy == "EMA_CROSSOVER":
-            if analysis["ema_cross"] == "BULLISH_CROSS" or (analysis["ema9"] > analysis["ema21"] and analysis["net_score"] >= 20):
-                should_enter = True
-                direction = "LONG"
-                reason = "EMA Golden Cross (EMA9 > EMA21)"
-            elif is_futures and (analysis["ema_cross"] == "BEARISH_CROSS" or (analysis["ema9"] < analysis["ema21"] and analysis["net_score"] <= -20)):
-                should_enter = True
-                direction = "SHORT"
-                reason = "EMA Death Cross (EMA9 < EMA21) - Vào vị thế SHORT"
-
-        elif self.strategy == "HYBRID_SMART":
-            if analysis["action"] in ["STRONG_BUY", "BUY"] and analysis["net_score"] >= 25:
-                should_enter = True
-                direction = "LONG"
-                reason = f"Thuật toán AI Tổng Hợp: Điểm +{analysis['net_score']} ({analysis['action']})"
-            elif is_futures and analysis["action"] in ["STRONG_SELL", "SELL"] and analysis["net_score"] <= -25:
-                should_enter = True
-                direction = "SHORT"
-                reason = f"Thuật toán AI Tổng Hợp: Điểm {analysis['net_score']} ({analysis['action']}) - Vào vị thế SHORT"
-
-        if should_enter:
+        decision = decide_entry(self.strategy, analysis, allow_short=(market == "FUTURES"))
+        if decision:
+            direction, reason = decision
             self.add_log("SIGNAL", f"🚀 TÍN HIỆU {sym} [{direction}]: {reason} tại giá ${current_price:,.4f}")
             self._execute_entry(sym, direction, current_price, reason, market=market)
         else:
@@ -930,7 +898,7 @@ class TradingBotEngine:
             quote += existing["notional_usdt"]
         price = quote / qty
         lev = order["leverage"]
-        direction = 1 if order["direction"] == "LONG" else -1
+        target_tp, target_sl = exit_prices(price, order["direction"], order["tp_pct"], order["sl_pct"], lev)
         pos = existing if existing is not None else {}
         pos.update({
             "position_id": pos.get("position_id", order["id"]),
@@ -938,8 +906,8 @@ class TradingBotEngine:
             "symbol": sym, "entry_price": price, "current_price": price, "quantity": qty,
             "cost_usdt": quote / lev, "notional_usdt": quote,
             "entry_time": entry_time, "realized_pnl_usdt": pos.get("realized_pnl_usdt", 0),
-            "target_tp_price": price * (1 + direction * order["tp_pct"] / lev / 100),
-            "target_sl_price": price * (1 - direction * order["sl_pct"] / lev / 100),
+            "target_tp_price": target_tp,
+            "target_sl_price": target_sl,
             "current_pnl_pct": 0.0, "current_pnl_usdt": 0.0,
             "trigger_reason": order["reason"], "order_id": data.get("orderId"),
         })

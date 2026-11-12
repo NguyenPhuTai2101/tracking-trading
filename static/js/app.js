@@ -1,3 +1,34 @@
+// Session expired or logged out elsewhere: any 401 from the API goes back to the login page.
+(() => {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    const url = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
+    if (response.status === 401 && url.startsWith("/api/") && !url.startsWith("/api/auth/")) {
+      location.replace("/login?next=" + encodeURIComponent(location.pathname));
+    }
+    return response;
+  };
+})();
+
+async function initAuthControls() {
+  try {
+    const status = await (await fetch("/api/auth/status")).json();
+    const button = document.getElementById("btn-logout");
+    if (button && status.enabled) button.classList.remove("hidden");
+  } catch (err) {
+    console.error("auth status error:", err);
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } finally {
+    location.replace("/login");
+  }
+}
+
 let botConfig = null;
 let botConfigDirty = false;
 let botSymbols = [];
@@ -33,6 +64,7 @@ const POPULAR_WATCHLIST_CANDIDATES = [
 
 // ==================== INITIALIZATION ====================
 document.addEventListener("DOMContentLoaded", () => {
+  initAuthControls();
   initChart();
   fetchSystemStatus();
   fetchBotStatus();
@@ -283,7 +315,9 @@ function switchTab(tabId) {
   const tabPositions = document.getElementById("tab-content-positions");
   const tabAcademy = document.getElementById("tab-content-academy");
   const tabHistory = document.getElementById("tab-content-history");
+  const tabBacktest = document.getElementById("tab-content-backtest");
 
+  tabBacktest.classList.add("hidden");
   tabTerminal.classList.add("hidden");
   tabPositions.classList.add("hidden");
   tabAcademy.classList.add("hidden");
@@ -301,6 +335,9 @@ function switchTab(tabId) {
     tabHistory.classList.remove("hidden");
     fetchOpenOrders();
     fetchTradeHistory();
+  } else if (tabId === "backtest") {
+    tabBacktest.classList.remove("hidden");
+    if (typeof renderBacktestDetail === "function") setTimeout(renderBacktestDetail, 50);
   }
 }
 

@@ -1,15 +1,18 @@
-import os
-import base64
-import binascii
-import secrets
-from fastapi import FastAPI, HTTPException, Query, Body
+from urllib.parse import quote
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+import auth
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from math import isfinite
 from pathlib import Path
 from contextlib import asynccontextmanager
+from collections import OrderedDict
+import threading
+import time
+import requests
+import backtest as backtest_module
 from trading_rules import BotConfigRequest, INTERVAL_SECONDS, validate_closed_candles
 
 from config import settings
@@ -30,31 +33,78 @@ async def lifespan(app):
 
 app = FastAPI(title="Binance Demo Trading & Academy Bot", version="3.0.0", lifespan=lifespan)
 
-# Optional HTTP Basic Auth: enabled only when both APP_USERNAME and APP_PASSWORD are set.
-_AUTH_USER = os.getenv("APP_USERNAME", "")
-_AUTH_PASS = os.getenv("APP_PASSWORD", "")
-_AUTH_EXEMPT = {"/healthz"}
-
-
 @app.middleware("http")
-async def basic_auth(request, call_next):
-    if not (_AUTH_USER and _AUTH_PASS) or request.url.path in _AUTH_EXEMPT:
+async def require_login(request, call_next):
+    path = request.url.path
+    config = auth.settings
+    if path == "/healthz":
         return await call_next(request)
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("basic "):
-        try:
-            user, _, password = base64.b64decode(header[6:]).decode("utf-8").partition(":")
-        except (binascii.Error, UnicodeDecodeError):
-            user, password = "", ""
-        if secrets.compare_digest(user.encode(), _AUTH_USER.encode()) and \
-                secrets.compare_digest(password.encode(), _AUTH_PASS.encode()):
-            return await call_next(request)
-    return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Tracking-Trading"'})
+    if config.misconfigured:
+        # Public deployment without credentials: refuse rather than expose trading controls.
+        return JSONResponse(status_code=503, content={
+            "detail": "Chưa cấu hình APP_USERNAME và APP_PASSWORD. Ứng dụng đã khóa để bảo vệ tài khoản."})
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not auth.same_origin(request):
+        return JSONResponse(status_code=403, content={"detail": "Yêu cầu khác nguồn bị từ chối."})
+    if not config.enabled or path in auth.PUBLIC_PATHS:
+        return await call_next(request)
+    if config.verify(request.cookies.get(auth.COOKIE_NAME)):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Cần đăng nhập."})
+    target = "/login" if path == "/" else f"/login?next={quote(path, safe='/')}"
+    return RedirectResponse(target, status_code=303)
 
 
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+# ----------------- LOGIN -----------------
+
+class LoginRequest(BaseModel):
+    username: str = Field(max_length=200)
+    password: str = Field(max_length=500)
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    config = auth.settings
+    return {"enabled": config.enabled,
+            "authenticated": config.enabled and config.verify(request.cookies.get(auth.COOKIE_NAME))}
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest, request: Request):
+    config = auth.settings
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Chưa bật đăng nhập (thiếu APP_USERNAME/APP_PASSWORD).")
+    ip = auth.client_ip(request)
+    wait = config.locked_for(ip)
+    if wait:
+        raise HTTPException(status_code=429, detail=f"Sai quá nhiều lần. Thử lại sau {wait} giây.")
+    if not config.check_credentials(req.username, req.password):
+        config.record_failure(ip)
+        time.sleep(0.5)   # slows guessing; the lockout is the real limit
+        raise HTTPException(status_code=401, detail="Sai tên đăng nhập hoặc mật khẩu.")
+    config.record_success(ip)
+    response = JSONResponse({"success": True})
+    response.set_cookie(auth.COOKIE_NAME, config.issue(), max_age=auth.SESSION_TTL_SEC, httponly=True,
+                        samesite="strict", secure=auth.is_https(request), path="/")
+    return response
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request):
+    auth.settings.revoke(request.cookies.get(auth.COOKIE_NAME))
+    response = JSONResponse({"success": True})
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
+    return response
 
 
 @app.exception_handler(ValueError)
@@ -368,6 +418,67 @@ class CloseUntrackedRequest(BaseModel):
 def close_untracked_positions(market: Market, req: CloseUntrackedRequest):
     """Explicit, per-symbol close of exchange positions the bot does not manage."""
     return bot_manager.engines[market].close_untracked_positions(req.symbols)
+
+
+# ----------------- BACKTEST -----------------
+
+class BacktestRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    symbols: List[str] = Field(min_length=1, max_length=backtest_module.MAX_SYMBOLS)
+    market: Market = "FUTURES"
+    strategies: List[Literal["RSI_SCALPING", "EMA_CROSSOVER", "HYBRID_SMART"]] = Field(min_length=1, max_length=3)
+    interval: str = "15m"
+    days: int = Field(30, ge=1, le=backtest_module.MAX_DAYS)
+    leverage: int = Field(10, ge=1, le=50)
+    trade_amount_usdt: float = Field(20, gt=0, allow_inf_nan=False)
+    take_profit_pct: float = Field(3, gt=0, lt=100, allow_inf_nan=False)
+    stop_loss_pct: float = Field(1.5, gt=0, lt=100, allow_inf_nan=False)
+    max_positions: int = Field(3, ge=1, le=10)
+    max_total_margin_usdt: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    max_open_risk_usdt: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    fee_pct: Optional[float] = Field(None, ge=0, lt=1, allow_inf_nan=False)
+    slippage_bps: float = Field(2, ge=0, le=100, allow_inf_nan=False)
+    cooldown_candles: int = Field(0, ge=0, le=100)
+    initial_balance: float = Field(1000, gt=0, allow_inf_nan=False)
+    source: Literal["live", "demo"] = "live"
+
+
+_backtest_lock = threading.Lock()
+_backtest_cache = OrderedDict()   # small LRU of downloaded candles for quick parameter tweaks
+
+
+@app.post("/api/backtest")
+def run_backtest_endpoint(req: BacktestRequest):
+    params = req.model_dump(exclude={"strategies", "fee_pct"})
+    params["fee_rate"] = None if req.fee_pct is None else req.fee_pct / 100
+    configs = [backtest_module.BacktestConfig(strategy=s, **params) for s in dict.fromkeys(req.strategies)]
+    if not _backtest_lock.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Đang chạy một backtest khác. Đợi xong rồi thử lại.")
+    try:
+        base = configs[0]
+        step = INTERVAL_SECONDS[base.interval] * 1000
+        end_ms = int(time.time() * 1000) // step * step
+        key = (base.source, base.market, tuple(base.symbols), base.interval, base.days, end_ms)
+        data = _backtest_cache.get(key)
+        if data is None:
+            for config in configs:
+                config.end_ms = end_ms
+            data = backtest_module.load_data(base)
+            _backtest_cache[key] = data
+            while len(_backtest_cache) > 4:
+                _backtest_cache.popitem(last=False)
+        _backtest_cache.move_to_end(key)
+        results = []
+        for config in configs:
+            result = backtest_module.run_backtest(config, data).to_dict()
+            result["total_trades"] = len(result["trades"])
+            result["trades"] = result["trades"][-200:]
+            results.append(result)
+        return {"results": results}
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Không tải được dữ liệu nến: {exc}")
+    finally:
+        _backtest_lock.release()
 
 # Serve static files and root
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

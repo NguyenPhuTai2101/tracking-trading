@@ -114,11 +114,36 @@ API trạng thái tổng: `GET /api/bots/status`. Các API `/api/bot/status`, `/
 hoặc `market=FUTURES` để tránh thao tác nhầm bot. Ví dụ:
 `POST /api/bot/stop?market=SPOT` không dừng bot Futures.
 
+### Đăng nhập
+
+Đặt `APP_USERNAME` và `APP_PASSWORD` để bật trang đăng nhập (`/login`). Mọi trang và
+API (trừ `/healthz`) đều cần phiên đăng nhập; cookie `HttpOnly`, `SameSite=Strict`,
+giữ 7 ngày. Sai 5 lần liên tiếp bị khóa 5 phút theo IP. Đổi mật khẩu sẽ đăng xuất mọi
+trình duyệt (hoặc đặt `SESSION_SECRET` riêng để tách khóa phiên khỏi mật khẩu).
+
+Trên Railway (hoặc khi đặt `REQUIRE_AUTH=1`) mà thiếu hai biến trên, ứng dụng trả 503
+cho mọi yêu cầu thay vì mở công khai. Chạy local không đặt biến thì không cần đăng nhập.
+
+### Backtest có tính phí
+
+Tab **Backtest** trên web, hoặc dòng lệnh:
+
+```powershell
+python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT --days 90 --strategy HYBRID_SMART RSI_SCALPING EMA_CROSSOVER
+python backtest.py --interval 1h --days 180 --leverage 3 --tp 12 --sl 6 --cooldown 2
+```
+
+Dùng đúng logic tín hiệu của bot (`strategy.py`), TP/SL theo % ROE, trần vị thế/ký quỹ/rủi ro.
+Vào lệnh ở giá mở nến kế tiếp (bỏ qua nếu lệch >1%), phí taker mặc định 0.05% (Futures)
+/ 0.1% (Spot) mỗi chiều cộng trượt giá. Nến chạm cả TP và SL tính là SL. Chưa mô phỏng
+funding, thanh lý và làm tròn khối lượng. Dữ liệu nến lấy từ API công khai của Binance
+(`--source demo` để dùng sàn Demo), không gửi khóa API.
+
 ### Kiểm tra hồi quy
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m unittest -v test_trading_upgrade test_bot_isolation
+python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth
 ```
 
 Bộ test dùng API giả lập và chặn kết nối mạng ngoài ý muốn. Kiểm tra API Demo

@@ -97,6 +97,10 @@
             <i class="fa-solid fa-arrows-rotate text-xs"></i>
           </button>
         </div>
+
+        <button id="btn-logout" onclick="logout()" title="Đăng xuất" class="hidden px-3 py-2 rounded-xl bg-[#232a3d] hover:bg-red-500 text-gray-300 hover:text-white text-xs font-semibold transition-all">
+          <i class="fa-solid fa-right-from-bracket mr-1"></i> Đăng xuất
+        </button>
       </div>
 
     </div>
@@ -124,6 +128,11 @@
       <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
         <i class="fa-solid fa-clock-rotate-left"></i>
         <span>Lịch Sử & Hiệu Suất</span>
+      </button>
+
+      <button onclick="switchTab('backtest')" id="tab-btn-backtest" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-flask text-cyan-400"></i>
+        <span>Backtest</span>
       </button>
     </div>
   </div>
@@ -1193,6 +1202,109 @@
 
     </div>
 
+    <!-- ======================================================== -->
+    <!-- TAB 5: BACKTEST (FEE-AWARE) -->
+    <!-- ======================================================== -->
+    <div id="tab-content-backtest" class="hidden space-y-5">
+      <div class="card-glass p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#232a3d]">
+          <div>
+            <h3 class="text-base font-bold text-white"><i class="fa-solid fa-flask text-cyan-400 mr-2"></i>Backtest chiến lược (đã tính phí &amp; trượt giá)</h3>
+            <p class="text-xs text-gray-400 mt-1">Chạy lại đúng logic tín hiệu của bot trên nến lịch sử. Vào lệnh ở giá mở nến kế tiếp; nến chạm cả TP và SL được tính là SL. Chưa tính funding và thanh lý.</p>
+          </div>
+          <button type="button" onclick="backtestUseBotConfig()" class="px-3 py-1.5 rounded-lg bg-[#232a3d] hover:bg-[#2e374f] text-gray-200 text-xs font-semibold">
+            <i class="fa-solid fa-download mr-1"></i> Lấy cấu hình <span class="selected-bot-label">Bot FUTURES</span>
+          </button>
+        </div>
+
+        <form id="backtest-form" onsubmit="runBacktest(event)" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3 mt-4 text-xs">
+          <label class="col-span-2 md:col-span-4 xl:col-span-3 flex flex-col gap-1 text-gray-400">Mã (cách nhau bởi dấu phẩy)
+            <input id="bt-symbols" class="bt-input" value="BTCUSDT, ETHUSDT, SOLUSDT" required></label>
+          <label class="flex flex-col gap-1 text-gray-400">Thị trường
+            <select id="bt-market" class="bt-input"><option>FUTURES</option><option>SPOT</option></select></label>
+          <label class="flex flex-col gap-1 text-gray-400">Khung nến
+            <select id="bt-interval" class="bt-input"><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>4h</option></select></label>
+          <label class="flex flex-col gap-1 text-gray-400">Số ngày (tối đa 180)
+            <input id="bt-days" type="number" min="1" max="180" value="30" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Đòn bẩy
+            <input id="bt-leverage" type="number" min="1" max="50" value="10" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Ký quỹ/lệnh (USDT)
+            <input id="bt-amount" type="number" min="1" step="any" value="20" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">TP (% ROE)
+            <input id="bt-tp" type="number" min="0.1" step="any" value="3" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">SL (% ROE)
+            <input id="bt-sl" type="number" min="0.1" step="any" value="1.5" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Số vị thế tối đa
+            <input id="bt-max-positions" type="number" min="1" max="10" value="3" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Phí/chiều (%, trống = mặc định)
+            <input id="bt-fee" type="number" min="0" max="0.99" step="any" placeholder="0.05 / 0.1" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Trượt giá/lần khớp (bps)
+            <input id="bt-slippage" type="number" min="0" max="100" step="any" value="2" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Nghỉ sau khi thoát (nến)
+            <input id="bt-cooldown" type="number" min="0" max="100" value="0" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Vốn ban đầu (USDT)
+            <input id="bt-balance" type="number" min="1" step="any" value="1000" class="bt-input"></label>
+          <fieldset class="col-span-2 md:col-span-4 xl:col-span-3 flex flex-wrap items-center gap-3 text-gray-300">
+            <legend class="text-gray-400 mb-1">Chiến lược (chọn nhiều để so sánh)</legend>
+            <label><input type="checkbox" name="bt-strategy" value="HYBRID_SMART" checked> HYBRID_SMART</label>
+            <label><input type="checkbox" name="bt-strategy" value="RSI_SCALPING"> RSI_SCALPING</label>
+            <label><input type="checkbox" name="bt-strategy" value="EMA_CROSSOVER"> EMA_CROSSOVER</label>
+          </fieldset>
+          <div class="col-span-2 md:col-span-4 xl:col-span-3 flex items-end justify-end">
+            <button id="bt-run" type="submit" class="px-5 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-xs">
+              <i class="fa-solid fa-play mr-1"></i> Chạy backtest
+            </button>
+          </div>
+        </form>
+        <p id="bt-status" class="text-xs text-gray-400 mt-3" role="status"></p>
+      </div>
+
+      <div id="bt-results" class="hidden space-y-5">
+        <div class="card-glass p-5">
+          <h4 class="text-sm font-bold text-white mb-3">So sánh chiến lược</h4>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-gray-300">
+              <thead class="bg-[#080a0f] text-gray-400 font-mono">
+                <tr><th class="p-2">Chiến lược</th><th class="p-2 text-right">Lệnh</th><th class="p-2 text-right">Winrate</th><th class="p-2 text-right">Cần để hòa vốn</th><th class="p-2 text-right">PnL trước phí</th><th class="p-2 text-right">Phí + trượt</th><th class="p-2 text-right">PnL ròng</th><th class="p-2 text-right">Lợi nhuận</th><th class="p-2 text-right">Profit factor</th><th class="p-2 text-right">Max DD</th></tr>
+              </thead>
+              <tbody id="bt-compare-body"></tbody>
+            </table>
+          </div>
+          <ul id="bt-warnings" class="text-[11px] text-amber-300 mt-3 space-y-1"></ul>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div class="card-glass p-5 xl:col-span-2">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="text-sm font-bold text-white">Đường vốn (sau phí)</h4>
+              <select id="bt-view" onchange="renderBacktestDetail()" class="bt-input w-auto"></select>
+            </div>
+            <div id="bt-equity" class="w-full h-[280px]"></div>
+          </div>
+          <div class="card-glass p-5">
+            <h4 class="text-sm font-bold text-white mb-3">Theo mã</h4>
+            <table class="w-full text-left text-xs text-gray-300">
+              <thead class="text-gray-400 font-mono"><tr><th class="p-1.5">Mã</th><th class="p-1.5 text-right">Lệnh</th><th class="p-1.5 text-right">Winrate</th><th class="p-1.5 text-right">Ròng</th></tr></thead>
+              <tbody id="bt-symbol-body"></tbody>
+            </table>
+            <div id="bt-exit-reasons" class="text-[11px] text-gray-400 mt-3"></div>
+          </div>
+        </div>
+
+        <div class="card-glass p-5">
+          <h4 class="text-sm font-bold text-white mb-3">Lệnh gần nhất <span id="bt-trades-note" class="text-gray-500 font-normal"></span></h4>
+          <div class="overflow-x-auto max-h-[420px]">
+            <table class="w-full text-left text-xs text-gray-300">
+              <thead class="bg-[#080a0f] text-gray-400 font-mono sticky top-0">
+                <tr><th class="p-2">Mở</th><th class="p-2">Mã</th><th class="p-2">Chiều</th><th class="p-2 text-right">Giá vào</th><th class="p-2 text-right">Giá ra</th><th class="p-2">Thoát</th><th class="p-2 text-right">Trước phí</th><th class="p-2 text-right">Phí</th><th class="p-2 text-right">Ròng</th></tr>
+              </thead>
+              <tbody id="bt-trades-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <!-- Searchable Coin Modal Popup (500+ Coins) -->
@@ -1246,6 +1358,7 @@
   <!-- App JavaScript Modules -->
   <script src="/static/js/chart.js"></script>
   <script src="/static/js/academy.js"></script>
-  <script src="/static/js/app.js?v=3.0.0"></script>
+  <script src="/static/js/app.js?v=3.1.0"></script>
+  <script src="/static/js/backtest.js?v=3.1.0"></script>
 </body>
 </html>
