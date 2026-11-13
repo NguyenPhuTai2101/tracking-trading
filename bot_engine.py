@@ -16,7 +16,8 @@ from config import settings
 from binance_client import binance_client
 from indicators import analyze_market_signals
 from strategy import (decide_entry, plan_exits, trend_allows, breakeven_levels,
-                      stop_too_close_to_liquidation, TREND_HISTORY)
+                      stop_too_close_to_liquidation, risk_based_margin, entry_block_reason,
+                      TREND_HISTORY, BREAKEVEN_FEE_BUFFER)
 from trading_rules import INTERVAL_SECONDS
 
 STATE_FILE = str(Path(__file__).resolve().with_name("bot_state.json"))
@@ -69,6 +70,13 @@ class TradingBotEngine:
         self.trend_filter = False
         self.cooldown_candles = 0
         self.breakeven_at_r = 0.0
+        # Risk controls; 0 = off. risk_per_trade sizes each position so a stop-out loses a
+        # fixed amount; the daily limits pause new entries until the next (server) day.
+        self.risk_per_trade_usdt = 0.0
+        self.max_daily_loss_usdt = 0.0
+        self.max_consecutive_losses = 0
+        self.risk_day = {"date": "", "pnl": 0.0, "loss_streak": 0}
+        self.block_logged = None
         # Run intent survives restarts: a redeploy or crash resumes a bot the user left running.
         self.auto_run = False
         self.resume_pending = False
@@ -135,7 +143,7 @@ class TradingBotEngine:
                 "active_positions": self.active_positions,
                 "pending_orders": self.pending_orders,
                 "protective_orders": self.protective_orders,
-                "closed_trades": self.closed_trades[-50:],
+                "closed_trades": self.closed_trades[-500:],   # the dashboard needs history after a restart
                 "total_pnl_usdt": self.total_pnl_usdt,
                 "win_count": self.win_count,
                 "loss_count": self.loss_count,
@@ -146,6 +154,10 @@ class TradingBotEngine:
                 "trend_filter": self.trend_filter,
                 "cooldown_candles": self.cooldown_candles,
                 "breakeven_at_r": self.breakeven_at_r,
+                "risk_per_trade_usdt": self.risk_per_trade_usdt,
+                "max_daily_loss_usdt": self.max_daily_loss_usdt,
+                "max_consecutive_losses": self.max_consecutive_losses,
+                "risk_day": self.risk_day,
                 "auto_run": self.auto_run,
                 "stop_reason": self.stop_reason,
                 "stopped_at": self.stopped_at,
@@ -211,6 +223,12 @@ class TradingBotEngine:
                     self.trend_filter = data.get("trend_filter", self.trend_filter)
                     self.cooldown_candles = data.get("cooldown_candles", self.cooldown_candles)
                     self.breakeven_at_r = data.get("breakeven_at_r", self.breakeven_at_r)
+                    self.risk_per_trade_usdt = data.get("risk_per_trade_usdt", self.risk_per_trade_usdt)
+                    self.max_daily_loss_usdt = data.get("max_daily_loss_usdt", self.max_daily_loss_usdt)
+                    self.max_consecutive_losses = data.get("max_consecutive_losses", self.max_consecutive_losses)
+                    day = data.get("risk_day") or {}
+                    self.risk_day = {"date": str(day.get("date", "")), "pnl": float(day.get("pnl", 0.0)),
+                                     "loss_streak": int(day.get("loss_streak", 0))}
                     self.auto_run = bool(data.get("auto_run", False))
                     self.resume_pending = self.auto_run
                     self.stop_reason = data.get("stop_reason")
@@ -228,7 +246,9 @@ class TradingBotEngine:
                         max_total_margin_usdt=self.max_total_margin_usdt, max_open_risk_usdt=self.max_open_risk_usdt,
                         exit_mode=self.exit_mode, atr_sl_mult=self.atr_sl_mult, atr_tp_mult=self.atr_tp_mult,
                         trend_filter=self.trend_filter, cooldown_candles=self.cooldown_candles,
-                        breakeven_at_r=self.breakeven_at_r)
+                        breakeven_at_r=self.breakeven_at_r, risk_per_trade_usdt=self.risk_per_trade_usdt,
+                        max_daily_loss_usdt=self.max_daily_loss_usdt,
+                        max_consecutive_losses=self.max_consecutive_losses)
                     for sym, pos in self.active_positions.items():
                         if self.fixed_market and pos.get("market_type") != self.fixed_market:
                             raise ValueError("Vị thế thuộc bot khác")
@@ -249,7 +269,8 @@ class TradingBotEngine:
                       amount=None, sl=None, tp=None, interval_sec=None, watchlist_symbols=None,
                       max_positions=None, interval=None, max_total_margin_usdt=None, max_open_risk_usdt=None,
                       exit_mode=None, atr_sl_mult=None, atr_tp_mult=None, trend_filter=None,
-                      cooldown_candles=None, breakeven_at_r=None):
+                      cooldown_candles=None, breakeven_at_r=None, risk_per_trade_usdt=None,
+                      max_daily_loss_usdt=None, max_consecutive_losses=None):
         request = BotConfigRequest(
             market_type=market_type, leverage=leverage, symbol=symbol, strategy=strategy,
             trade_amount_usdt=amount, stop_loss_pct=sl, take_profit_pct=tp,
@@ -257,7 +278,9 @@ class TradingBotEngine:
             max_positions=max_positions, interval=interval,
             max_total_margin_usdt=max_total_margin_usdt, max_open_risk_usdt=max_open_risk_usdt,
             exit_mode=exit_mode, atr_sl_mult=atr_sl_mult, atr_tp_mult=atr_tp_mult,
-            trend_filter=trend_filter, cooldown_candles=cooldown_candles, breakeven_at_r=breakeven_at_r)
+            trend_filter=trend_filter, cooldown_candles=cooldown_candles, breakeven_at_r=breakeven_at_r,
+            risk_per_trade_usdt=risk_per_trade_usdt, max_daily_loss_usdt=max_daily_loss_usdt,
+            max_consecutive_losses=max_consecutive_losses)
         updates = request.model_dump(exclude_none=True)
         if self.fixed_market and updates.get("market_type", self.fixed_market) != self.fixed_market:
             raise ValueError("Mỗi bot có thị trường cố định. Chọn bot tương ứng để cấu hình.")
@@ -269,6 +292,10 @@ class TradingBotEngine:
                     raise RuntimeError("Không đọc hoặc lưu được trạng thái bot.")
                 if self.is_running:
                     raise ValueError("Tạm dừng mở lệnh mới trước khi sửa cấu hình bot.")
+                risk = updates.get("risk_per_trade_usdt", self.risk_per_trade_usdt)
+                if risk and risk > updates.get("max_open_risk_usdt", self.max_open_risk_usdt):
+                    raise ValueError("Lỗ tối đa mỗi lệnh lớn hơn 'Trần tổng lỗ tại SL' nên bot sẽ không mở được "
+                                     "lệnh nào. Tăng trần hoặc giảm mức lỗ mỗi lệnh.")
                 changing_market = updates.get("market_type", self.market_type) != self.market_type
                 changing_leverage = updates.get("leverage", self.leverage) != self.leverage
                 if (changing_market or changing_leverage) and (self.active_positions or self.pending_orders or self.protective_orders):
@@ -777,12 +804,33 @@ class TradingBotEngine:
             if not result["success"]:
                 self.add_log("WARN", f"{sym}: {result.get('error')}")
 
+    def _risk_today(self):
+        """Today's realised result (server date); starts from zero on a new day."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.risk_day.get("date") != today:
+            self.risk_day = {"date": today, "pnl": 0.0, "loss_streak": 0}
+        return self.risk_day
+
+    def _entry_block(self):
+        day = self._risk_today()
+        return entry_block_reason(day["pnl"], day["loss_streak"],
+                                  self.max_daily_loss_usdt, self.max_consecutive_losses)
+
     def _scan_symbol_for_entry(self, sym: str):
         with self.lock:
             if (not self.is_running or not self.entries_enabled or self.pending_orders
                     or not self._protection_ready()
                     or sym in self.active_positions or len(self.active_positions) >= self.max_positions):
                 return
+            block = self._entry_block()
+            announce = block and self.block_logged != (self.risk_day["date"], block)
+            if announce:
+                self.block_logged = (self.risk_day["date"], block)
+        if block:
+            if announce:
+                self.add_log("WARN", f"⏸ {block} Vị thế đang mở vẫn được giám sát TP/SL.")
+            return
+        with self.lock:
             market, interval = self.market_type, self.interval
             trend_filter, cooldown = self.trend_filter, self.cooldown_candles
             last_exit = self.last_exit_ms.get(sym, 0)
@@ -843,8 +891,11 @@ class TradingBotEngine:
                         or not self._protection_ready()
                         or len(self.active_positions) >= self.max_positions):
                     return
+                if self._entry_block():
+                    return
                 leverage = self.leverage if market == "FUTURES" else 1
                 amount = self.trade_amount_usdt
+                risk_usdt = self.risk_per_trade_usdt
                 order = {
                     "id": uuid4().hex, "market": market, "kind": "entry", "direction": direction,
                     "leverage": leverage, "reason": trigger_reason,
@@ -859,6 +910,11 @@ class TradingBotEngine:
             if stop_too_close_to_liquidation(current_price, planned_sl, leverage):
                 self.add_log("WARN", f"Bỏ lệnh {sym}: SL theo ATR quá xa so với đòn bẩy {leverage}x (gần giá thanh lý).")
                 return
+            if risk_usdt:
+                # Fixed risk per trade: the margin follows the stop distance, capped by the budget.
+                amount = int(risk_based_margin(risk_usdt, current_price, planned_sl, leverage, amount, market) * 100) / 100
+                self.add_log("INFO", f"{sym}: ký quỹ {amount:.2f} USDT để lỗ tại SL ≈ {risk_usdt:g} USDT "
+                                     f"(SL cách giá {abs(current_price - planned_sl) / current_price * 100:.2f}%).")
             with self.lock:
                 used_margin = sum(p["cost_usdt"] for p in self.active_positions.values())
                 open_risk = sum(abs(p["entry_price"] - p["target_sl_price"]) * p["quantity"]
@@ -1084,12 +1140,18 @@ class TradingBotEngine:
         self.closed_trades = self.closed_trades[-500:]
         self.total_pnl_usdt = round(self.total_pnl_usdt + pnl, 8)
         pos["realized_pnl_usdt"] = pos.get("realized_pnl_usdt", 0) + pnl
+        # The daily limit counts estimated round-trip taker fees, so it trips a little early
+        # rather than late. total_pnl_usdt above stays gross, as before.
+        day = self._risk_today()
+        day["pnl"] = round(day["pnl"] + pnl - quote * BREAKEVEN_FEE_BUFFER.get(pos["market_type"], 0.001), 8)
         if isclose(qty, pos["quantity"], rel_tol=1e-9):
             self.last_exit_ms[sym] = int(time.time() * 1000)
             if pos["realized_pnl_usdt"] > 0:
                 self.win_count += 1
+                day["loss_streak"] = 0
             elif pos["realized_pnl_usdt"] < 0:
                 self.loss_count += 1
+                day["loss_streak"] += 1
             del self.active_positions[sym]
         else:
             remaining_fraction = (pos["quantity"] - qty) / pos["quantity"]
@@ -1179,6 +1241,13 @@ class TradingBotEngine:
                 self.add_log("WARN", f"Đối soát Futures thất bại: {exc}")
         return {"success": all(r["success"] for r in results), "results": results}
 
+    def get_history(self):
+        """All recorded closing fills, plus the keys of positions that are still (partly) open."""
+        with self.lock:
+            fills = deepcopy(self.closed_trades)
+            open_keys = [(p["market_type"], sym, p["entry_time"]) for sym, p in self.active_positions.items()]
+        return fills, open_keys
+
     def get_status(self) -> Dict[str, Any]:
         with self.lock:
             total_trades = self.win_count + self.loss_count
@@ -1207,6 +1276,11 @@ class TradingBotEngine:
                 "trend_filter": self.trend_filter,
                 "cooldown_candles": self.cooldown_candles,
                 "breakeven_at_r": self.breakeven_at_r,
+                "risk_per_trade_usdt": self.risk_per_trade_usdt,
+                "max_daily_loss_usdt": self.max_daily_loss_usdt,
+                "max_consecutive_losses": self.max_consecutive_losses,
+                "risk_day": dict(self._risk_today()),
+                "entry_block_reason": self._entry_block(),
                 "monitoring": bool(self.thread and self.thread.is_alive()),
                 "close_all_requested": self.close_all_requested,
                 "last_error": self.last_error,

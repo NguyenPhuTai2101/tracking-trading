@@ -44,6 +44,9 @@ function backtestUseBotConfig() {
   set("bt-atr-tp", bot.atr_tp_mult);
   set("bt-cooldown", bot.cooldown_candles);
   set("bt-breakeven", bot.breakeven_at_r);
+  set("bt-risk-per-trade", bot.risk_per_trade_usdt);
+  set("bt-daily-loss", bot.max_daily_loss_usdt);
+  set("bt-max-losses", bot.max_consecutive_losses);
   document.getElementById("bt-trend").checked = Boolean(bot.trend_filter);
   btLimits = { max_total_margin_usdt: bot.max_total_margin_usdt, max_open_risk_usdt: bot.max_open_risk_usdt };
   document.getElementById("bt-status").textContent = `Đã lấy cấu hình Bot ${bot.market_type} (gồm trần ký quỹ và trần rủi ro).`;
@@ -87,6 +90,9 @@ async function runBacktest(event) {
     atr_sl_mult: num("bt-atr-sl"),
     atr_tp_mult: num("bt-atr-tp"),
     breakeven_at_r: num("bt-breakeven"),
+    risk_per_trade_usdt: num("bt-risk-per-trade"),
+    max_daily_loss_usdt: num("bt-daily-loss"),
+    max_consecutive_losses: num("bt-max-losses"),
     trend_filter: document.getElementById("bt-trend").checked,
     initial_balance: num("bt-balance"),
     ...btLimits,
@@ -131,6 +137,20 @@ function renderBacktestResults() {
       <td class="p-2 text-right font-mono ${btTone(s.return_pct)}">${s.return_pct >= 0 ? "+" : ""}${s.return_pct}%</td>
       <td class="p-2 text-right font-mono">${s.profit_factor ?? "-"}</td>
       <td class="p-2 text-right font-mono text-red-300">${s.max_drawdown_pct}%</td>
+    </tr>`;
+  }).join("");
+  const part = p => p
+    ? `<td class="p-2 text-right font-mono">${p.trades}</td>
+       <td class="p-2 text-right font-mono font-bold ${btTone(p.net_pnl)}">${btMoney(p.net_pnl)}</td>
+       <td class="p-2 text-right font-mono">${p.profit_factor ?? "-"}</td>`
+    : '<td class="p-2 text-right text-gray-500" colspan="3">-</td>';
+  document.getElementById("bt-robust-body").innerHTML = backtestResults.map(r => {
+    const s = r.summary;
+    const hold = s.buy_hold_return_pct;
+    return `<tr class="border-b border-[#232a3d]">
+      <td class="p-2 font-bold text-white">${btEscape(r.config.strategy)}</td>
+      ${part(s.first_part)}${part(s.last_part)}
+      <td class="p-2 text-right font-mono ${hold == null ? "text-gray-500" : btTone(hold)}">${hold == null ? "-" : `${hold >= 0 ? "+" : ""}${hold}%`}</td>
     </tr>`;
   }).join("");
   const warnings = [...new Set(backtestResults.flatMap(r => r.warnings))];

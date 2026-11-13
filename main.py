@@ -13,6 +13,7 @@ import threading
 import time
 import requests
 import backtest as backtest_module
+import metrics
 from trading_rules import BotConfigRequest, INTERVAL_SECONDS, validate_closed_candles
 
 from config import settings
@@ -351,6 +352,22 @@ def get_bot_status(market: Market):
 def get_bots_status():
     return {"bots": {market: engine.get_status() for market, engine in bot_manager.engines.items()}}
 
+@app.get("/api/dashboard")
+def get_dashboard(market: Literal["ALL", "SPOT", "FUTURES"] = "ALL", days: int = Query(30, ge=0, le=3650)):
+    """Performance after estimated fees and current risk usage. days=0 means all recorded history."""
+    engines = [e for m, e in bot_manager.engines.items() if market in ("ALL", m)]
+    fills, open_keys = [], []
+    # Older state files can hold fills of the other market, so filter by the fill, not the bot.
+    for engine in bot_manager.engines.values():
+        engine_fills, engine_open = engine.get_history()
+        fills += [f for f in engine_fills if market in ("ALL", f.get("market_type"))]
+        open_keys += engine_open
+    result = metrics.summarise_fills(fills, days=days, open_keys=open_keys)
+    result["market"] = market
+    result["bots"] = [metrics.live_snapshot(engine.get_status()) for engine in engines]
+    return result
+
+
 @app.post("/api/bot/start")
 def start_bot(market: Market):
     return bot_manager.engines[market].start()
@@ -382,6 +399,9 @@ def update_bot_config(req: BotConfigRequest, market: Market):
         trend_filter=req.trend_filter,
         cooldown_candles=req.cooldown_candles,
         breakeven_at_r=req.breakeven_at_r,
+        risk_per_trade_usdt=req.risk_per_trade_usdt,
+        max_daily_loss_usdt=req.max_daily_loss_usdt,
+        max_consecutive_losses=req.max_consecutive_losses,
     )
     if not saved:
         raise HTTPException(status_code=503, detail="Không lưu được cấu hình bot.")
@@ -450,6 +470,9 @@ class BacktestRequest(BaseModel):
     atr_tp_mult: float = Field(3.0, ge=0.3, le=20, allow_inf_nan=False)
     trend_filter: bool = False
     breakeven_at_r: float = Field(0, ge=0, le=10, allow_inf_nan=False)
+    risk_per_trade_usdt: float = Field(0, ge=0, le=1_000_000, allow_inf_nan=False)
+    max_daily_loss_usdt: float = Field(0, ge=0, le=1_000_000, allow_inf_nan=False)
+    max_consecutive_losses: int = Field(0, ge=0, le=50)
     initial_balance: float = Field(1000, gt=0, allow_inf_nan=False)
     source: Literal["live", "demo"] = "live"
 

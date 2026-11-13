@@ -32,6 +32,10 @@ class BotConfigRequest(BaseModel):
     trend_filter: Optional[bool] = None
     cooldown_candles: Optional[int] = Field(default=None, ge=0, le=100)
     breakeven_at_r: Optional[float] = Field(default=None, ge=0, le=10)
+    # Risk controls; 0 = off (original behaviour: fixed margin per trade, no daily limit).
+    risk_per_trade_usdt: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    max_daily_loss_usdt: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    max_consecutive_losses: Optional[int] = Field(default=None, ge=0, le=50)
 
     @field_validator("watchlist_symbols")
     @classmethod

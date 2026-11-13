@@ -276,6 +276,8 @@ function readBotDraft() {
     max_total_margin_usdt: value("bot-total-budget"), max_open_risk_usdt: value("bot-risk-budget"),
     exit_mode: value("bot-exit-mode"), atr_sl_mult: value("bot-atr-sl"), atr_tp_mult: value("bot-atr-tp"),
     cooldown_candles: value("bot-cooldown"), breakeven_at_r: value("bot-breakeven"),
+    risk_per_trade_usdt: value("bot-risk-per-trade"), max_daily_loss_usdt: value("bot-daily-loss"),
+    max_consecutive_losses: value("bot-max-losses"),
     trend_filter: document.getElementById("bot-trend-filter").checked,
   };
 }
@@ -340,6 +342,8 @@ function applyBotConfig(bot, draft = false) {
     "bot-total-budget": bot.max_total_margin_usdt, "bot-risk-budget": bot.max_open_risk_usdt,
     "bot-exit-mode": bot.exit_mode || "ROE", "bot-atr-sl": bot.atr_sl_mult ?? 1.5, "bot-atr-tp": bot.atr_tp_mult ?? 3,
     "bot-cooldown": bot.cooldown_candles ?? 0, "bot-breakeven": bot.breakeven_at_r ?? 0,
+    "bot-risk-per-trade": bot.risk_per_trade_usdt ?? 0, "bot-daily-loss": bot.max_daily_loss_usdt ?? 0,
+    "bot-max-losses": bot.max_consecutive_losses ?? 0,
   };
   for (const [id, value] of Object.entries(fields)) document.getElementById(id).value = value;
   document.getElementById("bot-trend-filter").checked = Boolean(bot.trend_filter);
@@ -372,6 +376,10 @@ function switchTab(tabId) {
   const tabAcademy = document.getElementById("tab-content-academy");
   const tabHistory = document.getElementById("tab-content-history");
   const tabBacktest = document.getElementById("tab-content-backtest");
+
+  const tabDashboard = document.getElementById("tab-content-dashboard");
+  tabDashboard.classList.toggle("hidden", tabId !== "dashboard");
+  if (tabId === "dashboard" && typeof loadDashboard === "function") loadDashboard();
 
   tabBacktest.classList.add("hidden");
   tabTerminal.classList.add("hidden");
@@ -908,7 +916,8 @@ function renderSelectedBot(bot) {
 
     const configKeys = ["market_type", "leverage", "interval", "watchlist_symbols", "max_positions", "strategy",
       "trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt",
-      "exit_mode", "atr_sl_mult", "atr_tp_mult", "trend_filter", "cooldown_candles", "breakeven_at_r"];
+      "exit_mode", "atr_sl_mult", "atr_tp_mult", "trend_filter", "cooldown_candles", "breakeven_at_r",
+      "risk_per_trade_usdt", "max_daily_loss_usdt", "max_consecutive_losses"];
     if (!botConfig || (!botConfigDirty && !botSaveInFlight && configKeys.some(key => JSON.stringify(botConfig[key]) !== JSON.stringify(bot[key])))) {
       applyBotConfig(bot);
     }
@@ -927,9 +936,15 @@ function renderSelectedBot(bot) {
     if (stopReason) {
       const text = bot.resume_pending
         ? "Máy chủ vừa khởi động lại: bot đang tự chạy lại sau khi kiểm tra vị thế và SL..."
-        : (!bot.is_running && bot.stop_reason ? `Dừng lúc ${bot.stopped_at || "?"}: ${bot.stop_reason}` : "");
+        : (!bot.is_running && bot.stop_reason ? `Dừng lúc ${bot.stopped_at || "?"}: ${bot.stop_reason}`
+          : (bot.is_running && bot.entry_block_reason ? `Tạm nghỉ mở lệnh: ${bot.entry_block_reason}` : ""));
       stopReason.textContent = text;
       stopReason.classList.toggle("hidden", !text);
+    }
+    const riskDay = document.getElementById("bot-risk-day");
+    if (riskDay && bot.risk_day) {
+      const pnl = Number(bot.risk_day.pnl) || 0;
+      riskDay.textContent = `Hôm nay (${bot.risk_day.date}): ${pnl >= 0 ? "+" : "-"}$${Math.abs(pnl).toFixed(2)} sau phí ước tính · ${bot.risk_day.loss_streak} lệnh thua liên tiếp`;
     }
 
     // Exchange positions with no bot record (e.g. manual trades). Closing them is opt-in per symbol.
@@ -1215,7 +1230,8 @@ async function saveBotConfig() {
   const market = selectedBotMarket;
   const payload = readBotDraft();
   for (const key of ["trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt",
-                     "atr_sl_mult", "atr_tp_mult", "cooldown_candles", "breakeven_at_r"]) payload[key] = Number(payload[key]);
+                     "atr_sl_mult", "atr_tp_mult", "cooldown_candles", "breakeven_at_r",
+                     "risk_per_trade_usdt", "max_daily_loss_usdt", "max_consecutive_losses"]) payload[key] = Number(payload[key]);
   botSaveInFlight = true;
   setBotSaveStatus("Đang lưu...");
   document.getElementById("bot-settings-fields").disabled = true;

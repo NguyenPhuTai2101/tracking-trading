@@ -146,9 +146,34 @@ lệnh SL trên sàn sai thông số, thì bot dừng hẳn và ghi lý do.
 | Nghỉ sau khi thoát | Bỏ qua tín hiệu của N nến tính từ nến thoát lệnh trên cùng mã |
 | Dời SL hòa vốn | Khi lãi N×R, bot tự đóng nếu giá quay về giá vào + phí; SL trên sàn giữ nguyên làm lưới an toàn |
 
+### Quản trị rủi ro (0 = tắt, mặc định tắt)
+
+| Tùy chọn | Ý nghĩa |
+|---|---|
+| Lỗ tối đa mỗi lệnh tại SL | Bot tính ký quỹ theo khoảng cách SL (đã cộng phí khứ hồi ước tính) để mỗi lệnh chạm SL lỗ gần bằng số này. "Vốn mỗi lệnh" trở thành trần ký quỹ. Lệnh dưới mức tối thiểu của sàn bị bỏ, không tự nâng vốn |
+| Nghỉ khi lỗ trong ngày đạt | Khi kết quả đã chốt trong ngày (trừ phí ước tính) chạm mức này, bot ngừng mở lệnh mới đến ngày hôm sau theo giờ máy chủ. Vị thế đang mở vẫn được giám sát |
+| Nghỉ sau số lệnh thua liên tiếp | Tương tự, theo chuỗi thua trong ngày; một lệnh thắng đặt lại chuỗi |
+
+Các giới hạn này chỉ chặn mở lệnh mới; khớp MARKET vẫn có thể trượt giá nên lỗ thực có thể lớn hơn dự kiến.
+Cơ sở và nguồn tham khảo nằm ở Bài 8 trong tab Học viện.
+
 Nút **Cấu hình khuyến nghị** (bot Futures): RSI_SCALPING, khung 1h, 3x, ATR 1.5/3, lọc EMA200,
 nghỉ 2 nến. Đây là tổ hợp có drawdown thấp nhất trong các backtest đã chạy, chưa phải lợi thế
 đã được chứng minh; kiểm tra lại ở tab Backtest trước khi dùng.
+
+### Dashboard
+
+Tab **Dashboard** tổng hợp các lệnh bot đã đóng (API `GET /api/dashboard?market=ALL|SPOT|FUTURES&days=30`,
+`days=0` là toàn bộ lịch sử đã lưu). Lọc theo bot và 7/30/90 ngày; tự làm mới mỗi 10 giây khi đang mở.
+
+- Số liệu tính **sau phí taker ước tính** (0.1% giá trị lệnh khứ hồi với Futures, 0.2% với Spot), chưa gồm
+  funding, nên có thể lệch với PnL trước phí ở tab Lịch sử và với số thực trên Binance.
+- Các lần khớp đóng từng phần của cùng một vị thế được gộp thành một lệnh khi tính tỷ lệ thắng, profit factor
+  và kỳ vọng. Vị thế mới đóng một phần chưa được tính thắng/thua.
+- "Hôm nay & giới hạn rủi ro" cho biết bot đã dùng bao nhiêu so với giới hạn lỗ ngày, chuỗi thua, trần ký quỹ
+  và trần lỗ tại SL.
+- Bot lưu 500 lần khớp đóng gần nhất (trước đây chỉ 50 lần sau khi khởi động lại); lịch sử cũ hơn không có.
+- Dưới 30 lệnh trong giai đoạn đang xem, dashboard nhắc rằng các tỷ lệ chưa có ý nghĩa thống kê.
 
 ### Backtest có tính phí
 
@@ -165,11 +190,16 @@ Vào lệnh ở giá mở nến kế tiếp (bỏ qua nếu lệch >1%), phí ta
 funding, thanh lý và làm tròn khối lượng. Dữ liệu nến lấy từ API công khai của Binance
 (`--source demo` để dùng sàn Demo), không gửi khóa API.
 
+Kết quả kèm bảng **Kiểm tra độ ổn định**: cùng cấu hình trên 70% đầu và 30% cuối của giai đoạn
+(chia theo thời điểm vào lệnh) và mức "Mua & giữ" cùng giai đoạn. Chỉ chỉnh tham số dựa trên phần đầu;
+cấu hình chỉ lãi ở một phần, hoặc có dưới 30 lệnh, sẽ được cảnh báo. Các tùy chọn rủi ro dùng được ở
+dòng lệnh: `--risk 1 --daily-loss 3 --max-losses 3`.
+
 ### Kiểm tra hồi quy
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth test_entry_exit
+python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth test_entry_exit test_risk_controls test_dashboard
 ```
 
 Bộ test dùng API giả lập và chặn kết nối mạng ngoài ý muốn. Kiểm tra API Demo

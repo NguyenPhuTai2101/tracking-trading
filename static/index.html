@@ -15,7 +15,7 @@
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   
   <!-- Custom CSS -->
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=3.2.0">
 </head>
 <body class="min-h-screen flex flex-col bg-[#080a0f] text-[#f3f4f6]">
 
@@ -112,6 +112,11 @@
       <button onclick="switchTab('terminal')" id="tab-btn-terminal" class="tab-btn active py-3 font-semibold text-xs md:text-sm flex items-center space-x-2 transition-all whitespace-nowrap">
         <i class="fa-solid fa-chart-line"></i>
         <span>Terminal & Bot Auto</span>
+      </button>
+
+      <button onclick="switchTab('dashboard')" id="tab-btn-dashboard" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
+        <i class="fa-solid fa-gauge-high text-emerald-400"></i>
+        <span>Dashboard</span>
       </button>
 
       <button onclick="switchTab('positions')" id="tab-btn-positions" class="tab-btn py-3 font-semibold text-xs md:text-sm text-gray-400 hover:text-white flex items-center space-x-2 transition-all whitespace-nowrap">
@@ -547,6 +552,24 @@
             <p id="bot-exit-hint" class="text-[10px] text-gray-500"></p>
           </div>
 
+          <!-- Risk controls: fixed risk per trade and a daily circuit breaker (0 = off) -->
+          <div class="mt-3 p-3 rounded-xl bg-[#080a0f] border border-red-500/30 text-xs space-y-2.5">
+            <span class="font-bold text-gray-200"><i class="fa-solid fa-shield-halved text-red-400 mr-1"></i> Quản trị rủi ro <span class="font-normal text-gray-500">(0 = tắt)</span></span>
+            <div class="grid grid-cols-2 gap-2.5">
+              <label class="text-gray-400 col-span-2">Lỗ tối đa mỗi lệnh tại SL (USDT)
+                <input id="bot-risk-per-trade" type="number" min="0" step="0.1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-white font-mono focus:border-yellow-500 outline-none mt-1">
+              </label>
+              <label class="text-gray-400">Nghỉ khi lỗ trong ngày đạt (USDT)
+                <input id="bot-daily-loss" type="number" min="0" step="0.5" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-white font-mono focus:border-yellow-500 outline-none mt-1">
+              </label>
+              <label class="text-gray-400">Nghỉ sau số lệnh thua liên tiếp
+                <input id="bot-max-losses" type="number" min="0" max="50" step="1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-1.5 text-white font-mono focus:border-yellow-500 outline-none mt-1">
+              </label>
+            </div>
+            <p class="text-[10px] text-gray-500">Khi đặt lỗ tối đa mỗi lệnh, bot tự tính khối lượng theo khoảng cách SL (SL xa thì lệnh nhỏ lại) và "Vốn mỗi lệnh" trở thành trần ký quỹ. Giới hạn ngày tính theo ngày của máy chủ, đã trừ phí ước tính; bot vẫn giám sát TP/SL của vị thế đang mở.</p>
+            <p id="bot-risk-day" class="text-[10px] text-gray-400"></p>
+          </div>
+
           <div class="grid grid-cols-2 gap-2.5 mt-3 text-xs">
             <label class="text-gray-400">Trần tổng vốn bot (USDT)
               <input id="bot-total-budget" type="number" min="5" step="1" oninput="markBotDirty()" class="w-full bg-[#080a0f] border border-[#232a3d] rounded-lg px-3 py-2 text-white">
@@ -816,6 +839,14 @@
             <div>
               <div class="font-bold text-sm text-yellow-300">Luật Sàn Binance & Mã Lỗi</div>
               <div class="text-xs text-gray-400">Min Notional, Lot Size, Mark Price & Codes</div>
+            </div>
+          </button>
+
+          <button onclick="switchLesson(8)" id="lesson-btn-8" class="lesson-nav-btn w-full text-left p-3.5 rounded-xl card-glass hover:bg-[#1c2233] transition-all flex items-center space-x-3 border border-cyan-500/30">
+            <span class="w-7 h-7 rounded-full bg-gray-700 text-gray-300 font-bold text-xs flex items-center justify-center">8</span>
+            <div>
+              <div class="font-bold text-sm text-cyan-300">Nghiên Cứu Nói Gì Về Trading</div>
+              <div class="text-xs text-gray-400">Bằng chứng, quy trình & cách bot áp dụng</div>
             </div>
           </button>
         </div>
@@ -1131,10 +1162,178 @@
 
           </div>
 
+          <!-- LESSON 8 (WHAT THE RESEARCH SAYS) -->
+          <div id="lesson-content-8" class="lesson-body hidden space-y-5">
+            <div class="border-b border-cyan-500/40 pb-3">
+              <span class="text-xs font-bold text-cyan-400 uppercase">Bài Học 8 · Dựa Trên Bằng Chứng</span>
+              <h2 class="text-xl md:text-2xl font-bold text-white mt-1">Nghiên Cứu Nói Gì Về Trading, Và Bot Này Áp Dụng Ra Sao</h2>
+              <p class="text-xs text-gray-400 mt-1">Tóm tắt các nghiên cứu đã công bố. Đây là kiến thức chung để học, không phải lời khuyên đầu tư cho riêng bạn.</p>
+            </div>
+
+            <div class="space-y-4 text-xs md:text-sm text-gray-300 leading-relaxed">
+              <div class="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-xs leading-relaxed">
+                <strong>Xuất phát điểm:</strong> phần lớn người giao dịch ngắn hạn thua lỗ. Nghiên cứu trên toàn bộ nhà đầu tư cá nhân day trade hợp đồng tương lai ở Brazil (2013–2015) cho thấy trong số người kiên trì hơn 300 phiên, <b>97% lỗ</b> và chỉ khoảng 1,1% kiếm được hơn lương tối thiểu
+                (<a class="underline" target="_blank" rel="noopener" href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3423101">Chague, De-Losso &amp; Giovannetti</a>).
+                Mục tiêu đầu tiên vì vậy là <b>không mất vốn</b> trong lúc kiểm chứng xem mình có lợi thế thật hay không.
+              </div>
+
+              <h3 class="text-sm md:text-base font-bold text-white">1. Năm điều nghiên cứu ủng hộ</h3>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <h4 class="font-bold text-cyan-300 mb-1">Chỉ báo không tự tạo ra lợi nhuận</h4>
+                  <p class="text-gray-400">Kiểm tra khoảng 15.000 quy tắc kỹ thuật trên crypto cho kết quả lẫn lộn; riêng Bitcoin không cho thấy khả năng dự báo ngoài mẫu
+                  (<a class="underline" target="_blank" rel="noopener" href="https://link.springer.com/article/10.1007/s10479-019-03357-1">Hudson &amp; Urquhart, 2019</a>). RSI hay EMA chỉ là cách viết ra quy tắc; quy tắc có lãi sau phí hay không phải kiểm bằng dữ liệu.</p>
+                </div>
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <h4 class="font-bold text-cyan-300 mb-1">Thuận xu hướng có bằng chứng tốt nhất</h4>
+                  <p class="text-gray-400">Xu hướng 1–12 tháng có tính tiếp diễn trên 58 thị trường tương lai
+                  (<a class="underline" target="_blank" rel="noopener" href="https://papers.ssrn.com/abstract=2089463">Moskowitz, Ooi &amp; Pedersen, 2012</a>). Lưu ý bằng chứng nằm ở khung thời gian dài, không phải nến 5–15 phút. Trong bot: bật <b>Lọc EMA200</b> và ưu tiên khung 1h trở lên.</p>
+                </div>
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <h4 class="font-bold text-cyan-300 mb-1">Khối lượng lệnh quyết định sống còn</h4>
+                  <p class="text-gray-400">Giảm vị thế khi biến động cao giúp rủi ro ổn định hơn
+                  (<a class="underline" target="_blank" rel="noopener" href="https://amoreira2.github.io/alan-moreira.github.io/VolPortfolios_published.pdf">Moreira &amp; Muir, 2017</a>; các kiểm chứng sau cho kết quả kém rõ hơn). Lý thuyết Kelly cho thấy đặt cược quá lớn bị phạt nặng hơn nhiều so với đặt quá nhỏ, mà lợi thế ước tính thường bị thổi phồng. Trong bot: <b>Lỗ tối đa mỗi lệnh</b> cố định, SL theo ATR.</p>
+                </div>
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d]">
+                  <h4 class="font-bold text-cyan-300 mb-1">Backtest đẹp thường là do khớp dữ liệu cũ</h4>
+                  <p class="text-gray-400">Thử càng nhiều cấu hình, cấu hình "tốt nhất" càng dễ chỉ là may mắn
+                  (<a class="underline" target="_blank" rel="noopener" href="https://papers.ssrn.com/abstract=2507040">Bailey, Borwein, López de Prado &amp; Zhu</a>). Trên 888 chiến lược thật, chỉ số backtest gần như không dự báo được kết quả chạy thật
+                  (<a class="underline" target="_blank" rel="noopener" href="https://quantpedia.com/quantopians-academic-paper-about-in-vs-out-of-sample-performance-of-trading-alg/">Quantopian</a>). Trong bot: bảng <b>Kiểm tra độ ổn định</b> ở tab Backtest.</p>
+                </div>
+                <div class="bg-[#080a0f] p-3.5 rounded-xl border border-[#232a3d] md:col-span-2">
+                  <h4 class="font-bold text-cyan-300 mb-1">Đòn bẩy và phí bào mòn nhanh hơn bạn nghĩ</h4>
+                  <p class="text-gray-400">Đòn bẩy N lần nghĩa là giá đi ngược khoảng 1/N là mất hết ký quỹ (20x: khoảng 5%, chưa tính ký quỹ duy trì). Mỗi lệnh khứ hồi Futures tốn khoảng 0,1% giá trị vị thế tiền phí taker, cộng trượt giá và funding. Chiến lược vào ra nhiều với TP nhỏ cần tỷ lệ thắng rất cao chỉ để hòa vốn; cột "Cần để hòa vốn" trong Backtest cho biết con số đó.</p>
+                </div>
+              </div>
+
+              <h3 class="text-sm md:text-base font-bold text-white">2. Quy trình đề xuất khi dùng ứng dụng này</h3>
+              <ol class="list-decimal ml-5 space-y-1.5 text-xs text-gray-300">
+                <li><b>Viết quy tắc trước</b>: chiến lược, khung nến, TP/SL, lỗ tối đa mỗi lệnh. Không đổi giữa chừng khi đang có lệnh.</li>
+                <li><b>Backtest ít nhất 90–180 ngày, nhiều mã</b>, có phí. Cần tối thiểu khoảng 30 lệnh mới bắt đầu có ý nghĩa; càng nhiều càng tốt.</li>
+                <li><b>Chỉ chỉnh tham số dựa trên 70% đầu</b>, rồi xem 30% cuối. Lãi ở cả hai phần và profit factor ròng trên 1 mới đáng thử tiếp. So với "Mua &amp; giữ" để biết công sức có đáng không.</li>
+                <li><b>Chạy trên Binance Demo vài tuần</b> với đúng cấu hình đó. So kết quả thật với backtest; lệch nhiều nghĩa là mô phỏng chưa đúng.</li>
+                <li><b>Đặt giới hạn trước khi chạy</b>: lỗ tối đa mỗi lệnh nhỏ so với vốn (sách vở thường nêu 0,5–2%), giới hạn lỗ theo ngày, nghỉ sau chuỗi thua, đòn bẩy thấp.</li>
+                <li><b>Ghi nhật ký và xét lại theo tuần</b>, không theo từng lệnh. Một lệnh thua không nói lên điều gì; 50 lệnh thì có.</li>
+              </ol>
+
+              <div class="p-3.5 rounded-xl bg-[#080a0f] border border-[#232a3d] text-xs text-gray-400">
+                <b class="text-gray-200">Giới hạn cần nhớ:</b> backtest ở đây chưa mô phỏng funding, thanh lý và làm tròn khối lượng; Binance Demo khớp lệnh dễ hơn thị trường thật. Chưa có cấu hình nào của bot được chứng minh là có lợi thế. Các công cụ quản trị rủi ro chỉ giới hạn mức lỗ, không biến chiến lược lỗ thành lãi.
+              </div>
+            </div>
+          </div>
+
         </div>
 
       </div>
 
+    </div>
+
+    <!-- ======================================================== -->
+    <!-- TAB: DASHBOARD (performance after estimated fees + risk usage) -->
+    <!-- ======================================================== -->
+    <div id="tab-content-dashboard" class="hidden space-y-5">
+
+      <!-- One filter row scopes every figure below -->
+      <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 class="text-base md:text-lg font-bold text-white">Dashboard hiệu suất</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Tính trên các lệnh bot đã đóng, sau phí taker ước tính, chưa gồm funding. <span id="dash-updated" class="text-gray-500"></span></p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <div class="flex rounded-lg border border-[#232a3d] overflow-hidden" role="group" aria-label="Bot">
+            <button type="button" data-dash-market="ALL" class="dash-filter px-3 py-1.5">Cả hai bot</button>
+            <button type="button" data-dash-market="FUTURES" class="dash-filter px-3 py-1.5">Futures</button>
+            <button type="button" data-dash-market="SPOT" class="dash-filter px-3 py-1.5">Spot</button>
+          </div>
+          <div class="flex rounded-lg border border-[#232a3d] overflow-hidden" role="group" aria-label="Giai đoạn">
+            <button type="button" data-dash-days="7" class="dash-filter px-3 py-1.5">7 ngày</button>
+            <button type="button" data-dash-days="30" class="dash-filter px-3 py-1.5">30 ngày</button>
+            <button type="button" data-dash-days="90" class="dash-filter px-3 py-1.5">90 ngày</button>
+            <button type="button" data-dash-days="0" class="dash-filter px-3 py-1.5">Tất cả</button>
+          </div>
+        </div>
+      </div>
+      <p id="dash-error" class="hidden text-xs text-red-300"></p>
+
+      <!-- KPI row -->
+      <div class="grid grid-cols-2 lg:grid-cols-6 gap-4">
+        <div class="card-glass p-5 col-span-2">
+          <div class="text-xs text-gray-400">PnL ròng ước tính</div>
+          <div id="dash-net" class="text-4xl md:text-5xl font-bold mt-2 text-white">$0.00</div>
+          <div id="dash-net-sub" class="text-[11px] text-gray-500 mt-2">Chưa có lệnh</div>
+        </div>
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400">Tỷ lệ thắng</div>
+          <div id="dash-winrate" class="text-2xl font-bold mt-2 text-white">–</div>
+          <div id="dash-winrate-sub" class="text-[11px] text-gray-500 mt-1"></div>
+        </div>
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400">Profit factor</div>
+          <div id="dash-pf" class="text-2xl font-bold mt-2 text-white">–</div>
+          <div id="dash-pf-sub" class="text-[11px] text-gray-500 mt-1"></div>
+        </div>
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400">Kỳ vọng mỗi lệnh</div>
+          <div id="dash-exp" class="text-2xl font-bold mt-2 text-white">–</div>
+          <div id="dash-exp-sub" class="text-[11px] text-gray-500 mt-1"></div>
+        </div>
+        <div class="card-glass p-5">
+          <div class="text-xs text-gray-400">Sụt giảm lớn nhất</div>
+          <div id="dash-dd" class="text-2xl font-bold mt-2 text-white">–</div>
+          <div id="dash-dd-sub" class="text-[11px] text-gray-500 mt-1"></div>
+        </div>
+      </div>
+      <p id="dash-note" class="hidden text-[11px] text-amber-300"></p>
+
+      <!-- Two independent columns, so a tall card on one side leaves no hole on the other -->
+      <div class="grid grid-cols-1 xl:grid-cols-3 gap-5 items-start">
+       <div class="xl:col-span-2 space-y-5 min-w-0">
+        <div class="card-glass p-5">
+          <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+            <h3 class="text-sm font-bold text-white">PnL ròng cộng dồn (USDT)</h3>
+            <span id="dash-equity-readout" class="text-xs text-gray-400 font-mono"></span>
+          </div>
+          <div id="dash-equity" class="w-full h-[280px]"></div>
+          <p id="dash-equity-empty" class="hidden text-xs text-gray-500 text-center py-16">Chưa có lệnh đã đóng trong giai đoạn này.</p>
+        </div>
+        <div class="card-glass p-5">
+          <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+            <h3 class="text-sm font-bold text-white">PnL ròng theo ngày (USDT)</h3>
+            <span id="dash-daily-range" class="text-xs text-gray-500"></span>
+          </div>
+          <div id="dash-daily" class="relative w-full"></div>
+          <details class="mt-3 text-xs text-gray-400">
+            <summary class="cursor-pointer hover:text-white">Xem dạng bảng</summary>
+            <div class="overflow-x-auto mt-2 max-h-56 overflow-y-auto">
+              <table class="w-full text-left">
+                <thead class="text-gray-500"><tr><th class="p-1.5 font-normal">Ngày</th><th class="p-1.5 font-normal text-right">Lần khớp đóng</th><th class="p-1.5 font-normal text-right">PnL ròng</th></tr></thead>
+                <tbody id="dash-daily-table" class="font-mono"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+        <div class="card-glass p-5">
+          <h3 class="text-sm font-bold text-white mb-2">Theo mã</h3>
+          <div id="dash-by-symbol"></div>
+        </div>
+       </div>
+       <div class="space-y-5 min-w-0">
+        <div class="card-glass p-5">
+          <h3 class="text-sm font-bold text-white mb-3">Hôm nay &amp; giới hạn rủi ro</h3>
+          <div id="dash-live" class="space-y-5"></div>
+        </div>
+        <div class="card-glass p-5 space-y-5">
+          <div>
+            <h3 class="text-sm font-bold text-white mb-2">Theo chiều lệnh</h3>
+            <div id="dash-by-side"></div>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white mb-2">Theo lý do thoát</h3>
+            <div id="dash-by-reason"></div>
+          </div>
+        </div>
+       </div>
+      </div>
     </div>
 
     <!-- ======================================================== -->
@@ -1297,6 +1496,12 @@
             <input id="bt-atr-tp" type="number" min="0.3" max="20" step="0.1" value="3" class="bt-input"></label>
           <label class="flex flex-col gap-1 text-gray-400">Hòa vốn khi lãi (R, 0 = tắt)
             <input id="bt-breakeven" type="number" min="0" max="10" step="0.5" value="0" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Lỗ tối đa/lệnh (USDT, 0 = tắt)
+            <input id="bt-risk-per-trade" type="number" min="0" step="any" value="0" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Nghỉ khi lỗ ngày đạt (USDT)
+            <input id="bt-daily-loss" type="number" min="0" step="any" value="0" class="bt-input"></label>
+          <label class="flex flex-col gap-1 text-gray-400">Nghỉ sau N lệnh thua liên tiếp
+            <input id="bt-max-losses" type="number" min="0" max="50" step="1" value="0" class="bt-input"></label>
           <label class="flex items-center gap-2 text-gray-300 mt-5 cursor-pointer">
             <input id="bt-trend" type="checkbox" class="accent-cyan-400"> Lọc EMA200</label>
           <label class="flex flex-col gap-1 text-gray-400">Vốn ban đầu (USDT)
@@ -1325,6 +1530,16 @@
                 <tr><th class="p-2">Chiến lược</th><th class="p-2 text-right">Lệnh</th><th class="p-2 text-right">Winrate</th><th class="p-2 text-right">Cần để hòa vốn</th><th class="p-2 text-right">PnL trước phí</th><th class="p-2 text-right">Phí + trượt</th><th class="p-2 text-right">PnL ròng</th><th class="p-2 text-right">Lợi nhuận</th><th class="p-2 text-right">Profit factor</th><th class="p-2 text-right">Max DD</th></tr>
               </thead>
               <tbody id="bt-compare-body"></tbody>
+            </table>
+          </div>
+          <h4 class="text-sm font-bold text-white mt-5 mb-1">Kiểm tra độ ổn định</h4>
+          <p class="text-[11px] text-gray-400 mb-2">Cùng một cấu hình trên 70% đầu và 30% cuối của giai đoạn. Chỉ chỉnh tham số dựa trên phần đầu, rồi xem phần cuối như bài kiểm tra: cấu hình chỉ lãi ở một phần thường là do khớp ngẫu nhiên với dữ liệu cũ. "Mua &amp; giữ" là mức so sánh: giá các mã thay đổi bao nhiêu nếu không làm gì.</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-gray-300">
+              <thead class="bg-[#080a0f] text-gray-400 font-mono">
+                <tr><th class="p-2">Chiến lược</th><th class="p-2 text-right">70% đầu: lệnh</th><th class="p-2 text-right">PnL ròng</th><th class="p-2 text-right">Profit factor</th><th class="p-2 text-right">30% cuối: lệnh</th><th class="p-2 text-right">PnL ròng</th><th class="p-2 text-right">Profit factor</th><th class="p-2 text-right">Mua &amp; giữ</th></tr>
+              </thead>
+              <tbody id="bt-robust-body"></tbody>
             </table>
           </div>
           <ul id="bt-warnings" class="text-[11px] text-amber-300 mt-3 space-y-1"></ul>
@@ -1413,9 +1628,10 @@
   </footer>
 
   <!-- App JavaScript Modules -->
-  <script src="/static/js/chart.js"></script>
-  <script src="/static/js/academy.js"></script>
-  <script src="/static/js/app.js?v=3.1.0"></script>
-  <script src="/static/js/backtest.js?v=3.1.0"></script>
+  <script src="/static/js/chart.js?v=3.2.0"></script>
+  <script src="/static/js/academy.js?v=3.2.0"></script>
+  <script src="/static/js/app.js?v=3.2.0"></script>
+  <script src="/static/js/backtest.js?v=3.2.0"></script>
+  <script src="/static/js/dashboard.js?v=3.2.0"></script>
 </body>
 </html>

@@ -14,6 +14,11 @@ Execution model (deliberately conservative):
 - Taker fees are charged on entry and exit notional; slippage is charged on every fill.
 - Funding, liquidation and exchange lot rounding are not modelled.
 
+Robustness report (a backtest is a hypothesis, not proof):
+- The tested period is split 70/30 by entry time. Tune settings on the first part only and
+  read the last part as the check; a setting that only works in one part is likely noise.
+- Buy & hold over the same period is reported as the baseline to beat.
+
 CLI example:
     python backtest.py --symbols BTCUSDT ETHUSDT --days 30 --strategy HYBRID_SMART
 """
@@ -28,12 +33,16 @@ import requests
 from config import settings
 from indicators import analyze_market_signals
 from strategy import (STRATEGIES, decide_entry, plan_exits, trend_allows, breakeven_levels,
-                      stop_too_close_to_liquidation, TREND_HISTORY)
+                      stop_too_close_to_liquidation, risk_based_margin, entry_block_reason,
+                      TREND_HISTORY)
 from trading_rules import INTERVAL_SECONDS
 
 WINDOW = 60          # the live bot analyses the last 60 closed candles (limit=61 incl. the open one)
 MAX_DAYS = 180
 MAX_SYMBOLS = 10
+MIN_NOTIONAL_USDT = 5.0      # smallest order most Binance symbols accept; smaller sized trades are skipped
+MIN_TRADES_FOR_STATS = 30    # below this, win rate and profit factor are mostly noise
+IN_SAMPLE_FRACTION = 0.7
 
 DATA_SOURCES = {
     # Public market data only: no API keys are sent for backtests.
@@ -67,6 +76,9 @@ class BacktestConfig:
     atr_tp_mult: float = 3.0
     trend_filter: bool = False            # only trade with EMA200 of the same timeframe
     breakeven_at_r: float = 0.0           # move stop to entry+fees after this many R; 0 = off
+    risk_per_trade_usdt: float = 0.0      # size each trade to lose this at the stop; 0 = fixed margin
+    max_daily_loss_usdt: float = 0.0      # pause entries for the rest of the UTC day; 0 = off
+    max_consecutive_losses: int = 0       # pause entries after this many losses in a row; 0 = off
     initial_balance: float = 1000.0
     source: str = "live"
     end_ms: Optional[int] = None
@@ -105,13 +117,16 @@ class BacktestConfig:
             raise ValueError("Hệ số ATR không hợp lệ")
         if self.breakeven_at_r and not 0.5 <= self.breakeven_at_r <= 10:
             raise ValueError("Dời SL hòa vốn: 0 (tắt) hoặc 0.5R-10R")
+        if self.risk_per_trade_usdt < 0 or self.max_daily_loss_usdt < 0 or self.max_consecutive_losses < 0:
+            raise ValueError("Giới hạn rủi ro không hợp lệ")
         if self.source not in DATA_SOURCES:
             raise ValueError("Nguồn dữ liệu không hợp lệ")
         if self.max_total_margin_usdt is None:
             self.max_total_margin_usdt = self.trade_amount_usdt * self.max_positions
         if self.max_open_risk_usdt is None:
             # ATR stops vary per trade, so by default only the margin cap limits exposure.
-            self.max_open_risk_usdt = (self.trade_amount_usdt * self.max_positions if self.exit_mode == "ATR"
+            self.max_open_risk_usdt = (self.trade_amount_usdt * self.max_positions
+                                       if self.exit_mode == "ATR" or self.risk_per_trade_usdt
                                        else self.trade_amount_usdt * self.max_positions * self.stop_loss_pct / 100)
 
 
@@ -213,6 +228,14 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
     gap_skips = 0
     liquidation_skips = 0
     trend_skips = 0
+    small_skips = 0
+    guard_skips = 0
+    day = {"day": None, "pnl": 0.0, "streak": 0}   # realised net result of the current UTC day
+
+    def today(t):
+        if day["day"] != t // 86_400:
+            day.update(day=t // 86_400, pnl=0.0, streak=0)
+        return day
     history = TREND_HISTORY if config.trend_filter else WINDOW
 
     def close(pos, candle, raw_price, reason):
@@ -230,6 +253,9 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
         })
         del open_positions[pos.symbol]
         cooldown_until[pos.symbol] = candle["time"] * 1000 + config.cooldown_candles * step
+        stats = today(candle["time"])
+        stats["pnl"] += net
+        stats["streak"] = stats["streak"] + 1 if net < 0 else 0
 
     for t in timeline:
         # 1) Fill entries signalled on the previous candle at this candle's open.
@@ -250,16 +276,28 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
             if stop_too_close_to_liquidation(price, sl, config.leverage):
                 liquidation_skips += 1
                 continue
+            stats = today(t)
+            if entry_block_reason(stats["pnl"], stats["streak"], config.max_daily_loss_usdt,
+                                  config.max_consecutive_losses):
+                guard_skips += 1
+                continue
+            margin = config.trade_amount_usdt
+            if config.risk_per_trade_usdt:
+                margin = risk_based_margin(config.risk_per_trade_usdt, price, sl, config.leverage, margin,
+                                           config.market)
+                if margin * config.leverage < MIN_NOTIONAL_USDT:
+                    small_skips += 1
+                    continue
             used_margin = sum(p.margin for p in open_positions.values())
             open_risk = sum(abs(p.entry_price - p.stop_loss) * p.quantity for p in open_positions.values())
-            new_risk = config.trade_amount_usdt * config.leverage * abs(price - sl) / price
+            new_risk = margin * config.leverage * abs(price - sl) / price
             if (len(open_positions) >= config.max_positions
-                    or used_margin + config.trade_amount_usdt > config.max_total_margin_usdt + 1e-9
+                    or used_margin + margin > config.max_total_margin_usdt + 1e-9
                     or open_risk + new_risk > config.max_open_risk_usdt + 1e-9):
                 continue
-            qty = config.trade_amount_usdt * config.leverage / price
+            qty = margin * config.leverage / price
             be = breakeven_levels(price, sl, direction, config.breakeven_at_r, config.market)
-            open_positions[sym] = _Position(sym, direction, t, price, qty, config.trade_amount_usdt, tp, sl,
+            open_positions[sym] = _Position(sym, direction, t, price, qty, margin, tp, sl,
                                             price * qty * config.fee_rate, reason,
                                             be[0] if be else None, be[1] if be else None)
 
@@ -316,19 +354,57 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
         equity_curve.append({"time": trade["exit_time"], "equity": round(equity, 4)})
 
     summary = _summarise(trades, config)
+    period_start = timeline[history - 1] if len(timeline) >= history else None
+    period_end = timeline[-1] if timeline else None
     summary.update(ambiguous_candles=ambiguous, gap_skipped_entries=gap_skips,
                    liquidation_skipped_entries=liquidation_skips, trend_filtered_signals=trend_skips,
+                   min_notional_skipped_entries=small_skips, daily_limit_skipped_entries=guard_skips,
                    candles_tested=max(0, len(timeline) - history),
-                   period_start=timeline[history - 1] if len(timeline) >= history else None,
-                   period_end=timeline[-1] if timeline else None)
+                   period_start=period_start, period_end=period_end)
     if ambiguous:
         warnings.append(f"{ambiguous} nến chạm cả TP và SL; đã giả định SL khớp trước (thận trọng).")
     per_symbol = {sym: _summarise([t for t in trades if t["symbol"] == sym], config, brief=True)
                   for sym in series}
+
+    # Baseline: what simply holding each symbol over the tested period returned (no leverage, no fees).
+    for sym, s in series.items():
+        tested = [c for c in s["candles"] if period_start is not None and c["time"] >= period_start]
+        per_symbol[sym]["buy_hold_pct"] = (round((tested[-1]["close"] / tested[0]["close"] - 1) * 100, 2)
+                                           if len(tested) > 1 else None)
+    held = [row["buy_hold_pct"] for row in per_symbol.values() if row["buy_hold_pct"] is not None]
+    summary["buy_hold_return_pct"] = round(sum(held) / len(held), 2) if held else None
+
+    # Stability: the same settings on the first 70% and the last 30% of the period.
+    summary["split_time"] = None
+    if period_start is not None and period_end > period_start:
+        split = period_start + int((period_end - period_start) * IN_SAMPLE_FRACTION)
+        summary["split_time"] = split
+        summary["first_part"] = _part([t for t in trades if t["entry_time"] < split])
+        summary["last_part"] = _part([t for t in trades if t["entry_time"] >= split])
+        first, last = summary["first_part"], summary["last_part"]
+        if first["net_pnl"] > 0 and last["trades"] and last["net_pnl"] <= 0:
+            warnings.append("Lãi ở 70% đầu nhưng không lãi ở 30% cuối: kết quả không ổn định, "
+                            "nhiều khả năng cấu hình chỉ khớp với một giai đoạn.")
+    if 0 < len(trades) < MIN_TRADES_FOR_STATS:
+        warnings.append(f"Chỉ có {len(trades)} lệnh (< {MIN_TRADES_FOR_STATS}): mẫu quá nhỏ, winrate và "
+                        "profit factor chưa có ý nghĩa thống kê. Tăng số ngày hoặc số mã.")
+    if small_skips:
+        warnings.append(f"{small_skips} tín hiệu bị bỏ vì khối lượng theo rủi ro dưới {MIN_NOTIONAL_USDT:g} USDT "
+                        "(mức tối thiểu của sàn). Tăng rủi ro mỗi lệnh hoặc thu hẹp SL.")
     reasons: Dict[str, int] = {}
     for trade in trades:
         reasons[trade["exit_reason"]] = reasons.get(trade["exit_reason"], 0) + 1
     return BacktestResult(asdict(config), summary, per_symbol, reasons, trades, equity_curve, warnings)
+
+
+def _part(trades):
+    wins = sum(t["net_pnl"] for t in trades if t["net_pnl"] > 0)
+    losses = -sum(t["net_pnl"] for t in trades if t["net_pnl"] <= 0)
+    won = sum(1 for t in trades if t["net_pnl"] > 0)
+    return {"trades": len(trades),
+            "winrate_pct": round(won / len(trades) * 100, 2) if trades else 0.0,
+            "net_pnl": round(wins - losses, 4),
+            "profit_factor": round(wins / losses, 3) if losses > 0 else None}
 
 
 def _summarise(trades, config, brief=False):
@@ -355,7 +431,7 @@ def _summarise(trades, config, brief=False):
     round_trip_cost = notional * (2 * config.fee_rate + 2 * config.slippage_bps / 10_000)
     tp_usdt = config.trade_amount_usdt * config.take_profit_pct / 100 - round_trip_cost
     sl_usdt = config.trade_amount_usdt * config.stop_loss_pct / 100 + round_trip_cost
-    if config.exit_mode == "ATR" or config.breakeven_at_r:
+    if config.exit_mode == "ATR" or config.breakeven_at_r or config.risk_per_trade_usdt:
         # Distances vary per trade: use the realised average win/loss instead of the formula.
         breakeven_wr = round(avg_loss / (avg_win + avg_loss) * 100, 2) if avg_win + avg_loss > 0 else 0.0
     else:
@@ -387,7 +463,10 @@ def _print(result: BacktestResult):
              else f"TP {c['take_profit_pct']}% / SL {c['stop_loss_pct']}% ROE")
     extras = "".join([" | EMA200" if c["trend_filter"] else "",
                       f" | hòa vốn {c['breakeven_at_r']}R" if c["breakeven_at_r"] else "",
-                      f" | nghỉ {c['cooldown_candles']} nến" if c["cooldown_candles"] else ""])
+                      f" | nghỉ {c['cooldown_candles']} nến" if c["cooldown_candles"] else "",
+                      f" | rủi ro {c['risk_per_trade_usdt']:g} USDT/lệnh" if c["risk_per_trade_usdt"] else "",
+                      f" | lỗ ngày tối đa {c['max_daily_loss_usdt']:g}" if c["max_daily_loss_usdt"] else "",
+                      f" | nghỉ sau {c['max_consecutive_losses']} lệnh thua" if c["max_consecutive_losses"] else ""])
     print(f"\n== {c['strategy']} | {c['market']} {c['leverage']}x | {c['interval']} | {c['days']} ngày | "
           f"{exits}{extras} | phí {c['fee_rate'] * 100:.3f}%/chiều, "
           f"trượt {c['slippage_bps']} bps")
@@ -398,9 +477,16 @@ def _print(result: BacktestResult):
     pf = s["profit_factor"]
     print(f"Profit factor: {pf if pf is not None else '-'}  Kỳ vọng/lệnh: {s['expectancy']:+.4f}  "
           f"Max drawdown: {s['max_drawdown']:.2f} ({s['max_drawdown_pct']:.2f}%)")
+    if s.get("split_time"):
+        a, b = s["first_part"], s["last_part"]
+        print(f"Ổn định: 70% đầu {a['net_pnl']:+.2f} ({a['trades']} lệnh, PF {a['profit_factor'] or '-'})  |  "
+              f"30% cuối {b['net_pnl']:+.2f} ({b['trades']} lệnh, PF {b['profit_factor'] or '-'})")
+    if s.get("buy_hold_return_pct") is not None:
+        print(f"Mua & giữ cùng giai đoạn (không đòn bẩy): {s['buy_hold_return_pct']:+.2f}%")
     print("Theo mã:")
     for sym, row in result.per_symbol.items():
-        print(f"  {sym:<14} {row['trades']:>4} lệnh  winrate {row['winrate_pct']:>6}%  ròng {row['net_pnl']:+.2f}")
+        hold = f"  mua&giữ {row['buy_hold_pct']:+.2f}%" if row.get("buy_hold_pct") is not None else ""
+        print(f"  {sym:<14} {row['trades']:>4} lệnh  winrate {row['winrate_pct']:>6}%  ròng {row['net_pnl']:+.2f}{hold}")
     print("Lý do thoát:", result.exit_reasons)
     for warning in result.warnings:
         print("! " + warning)
@@ -430,6 +516,10 @@ def main(argv=None):
     parser.add_argument("--atr-tp", type=float, default=3.0, help="TP = hệ số x ATR (chế độ ATR)")
     parser.add_argument("--trend-filter", action="store_true", help="Chỉ vào lệnh cùng chiều EMA200")
     parser.add_argument("--breakeven", type=float, default=0.0, help="Dời SL về hòa vốn khi lãi N x R (0 = tắt)")
+    parser.add_argument("--risk", type=float, default=0.0,
+                        help="Lỗ tối đa mỗi lệnh tại SL (USDT); --amount thành trần ký quỹ. 0 = ký quỹ cố định")
+    parser.add_argument("--daily-loss", type=float, default=0.0, help="Ngừng vào lệnh khi lỗ trong ngày đạt mức này (USDT)")
+    parser.add_argument("--max-losses", type=int, default=0, help="Ngừng vào lệnh sau N lệnh thua liên tiếp trong ngày")
     parser.add_argument("--source", choices=list(DATA_SOURCES), default="live")
     args = parser.parse_args(argv)
 
@@ -439,7 +529,9 @@ def main(argv=None):
                 fee_rate=None if args.fee is None else args.fee / 100, slippage_bps=args.slippage_bps,
                 cooldown_candles=args.cooldown, initial_balance=args.balance, source=args.source,
                 exit_mode=args.exit_mode, atr_sl_mult=args.atr_sl, atr_tp_mult=args.atr_tp,
-                trend_filter=args.trend_filter, breakeven_at_r=args.breakeven)
+                trend_filter=args.trend_filter, breakeven_at_r=args.breakeven,
+                risk_per_trade_usdt=args.risk, max_daily_loss_usdt=args.daily_loss,
+                max_consecutive_losses=args.max_losses)
     data = load_data(BacktestConfig(strategy=args.strategy[0], **base))   # fetch once, reuse per strategy
     for strategy in args.strategy:
         _print(run_backtest(BacktestConfig(strategy=strategy, **base), data))

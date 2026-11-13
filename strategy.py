@@ -60,6 +60,28 @@ def plan_exits(entry_price, direction, *, exit_mode="ROE", tp_pct=3.0, sl_pct=1.
     return exit_prices(entry_price, direction, tp_pct, sl_pct, leverage)
 
 
+def risk_based_margin(risk_usdt, entry_price, stop_loss, leverage, max_margin, market="FUTURES"):
+    """Margin for a position that loses about `risk_usdt` (fees included) if the stop is hit.
+
+    Fixed-risk sizing: a wide stop gets a small position and a tight stop a larger one, so
+    every trade risks the same amount. Never exceeds `max_margin` (the per-trade budget).
+    """
+    distance = abs(entry_price - stop_loss) / entry_price
+    if risk_usdt <= 0 or distance <= 0:
+        raise ValueError("Không tính được khối lượng theo rủi ro")
+    notional = risk_usdt / (distance + BREAKEVEN_FEE_BUFFER.get(market, 0.001))
+    return min(notional / leverage, max_margin)
+
+
+def entry_block_reason(day_pnl, loss_streak, max_daily_loss_usdt, max_consecutive_losses):
+    """Daily circuit breaker: why new entries are paused for the rest of the day, else None."""
+    if max_daily_loss_usdt and day_pnl <= -max_daily_loss_usdt:
+        return f"Đã lỗ {-day_pnl:.2f} USDT hôm nay (giới hạn {max_daily_loss_usdt:g}). Nghỉ mở lệnh đến ngày mai."
+    if max_consecutive_losses and loss_streak >= max_consecutive_losses:
+        return f"Đã thua {loss_streak} lệnh liên tiếp hôm nay (giới hạn {max_consecutive_losses}). Nghỉ mở lệnh đến ngày mai."
+    return None
+
+
 def stop_too_close_to_liquidation(entry_price, stop_loss, leverage):
     """Isolated liquidation sits roughly 1/leverage away; keep the stop well inside it."""
     return leverage > 1 and abs(entry_price - stop_loss) / entry_price >= 0.8 / leverage
