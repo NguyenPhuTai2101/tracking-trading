@@ -117,8 +117,17 @@ class TradingUpgradeTests(unittest.TestCase):
         self.api.create_futures_stop.side_effect = None
         self.api.create_futures_stop.return_value = {"success": False, "error": "rejected"}
         self.open_position()
-        self.assertFalse(self.bot.is_running)
+        # One rejection (e.g. price already through the stop) closes the trade but keeps the
+        # bot running; new entries stay blocked until the unprotected position is gone.
+        self.assertTrue(self.bot.is_running)
+        self.assertFalse(self.bot.entries_enabled)
+        self.assertFalse(self.bot._protection_ready())
         self.assertEqual(self.bot.active_positions["BTCUSDT"]["exit_requested"], "PROTECTION_FAILED")
+        # A second rejection within the hour stops the bot and records why.
+        self.bot._protection_failure("ETHUSDT", "rejected")
+        self.assertFalse(self.bot.is_running)
+        self.assertFalse(self.bot.auto_run)
+        self.assertIn("2 lần", self.bot.stop_reason)
 
     def test_exchange_stop_fill_reconciles_after_restart(self):
         self.open_position()

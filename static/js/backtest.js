@@ -39,6 +39,12 @@ function backtestUseBotConfig() {
   set("bt-sl", bot.stop_loss_pct);
   set("bt-max-positions", bot.max_positions);
   document.querySelectorAll("input[name=bt-strategy]").forEach(box => { box.checked = box.value === bot.strategy; });
+  set("bt-exit-mode", bot.exit_mode || "ROE");
+  set("bt-atr-sl", bot.atr_sl_mult);
+  set("bt-atr-tp", bot.atr_tp_mult);
+  set("bt-cooldown", bot.cooldown_candles);
+  set("bt-breakeven", bot.breakeven_at_r);
+  document.getElementById("bt-trend").checked = Boolean(bot.trend_filter);
   btLimits = { max_total_margin_usdt: bot.max_total_margin_usdt, max_open_risk_usdt: bot.max_open_risk_usdt };
   document.getElementById("bt-status").textContent = `Đã lấy cấu hình Bot ${bot.market_type} (gồm trần ký quỹ và trần rủi ro).`;
 }
@@ -77,6 +83,11 @@ async function runBacktest(event) {
     fee_pct: feeRaw === "" ? null : Number(feeRaw),
     slippage_bps: num("bt-slippage"),
     cooldown_candles: num("bt-cooldown"),
+    exit_mode: document.getElementById("bt-exit-mode").value,
+    atr_sl_mult: num("bt-atr-sl"),
+    atr_tp_mult: num("bt-atr-tp"),
+    breakeven_at_r: num("bt-breakeven"),
+    trend_filter: document.getElementById("bt-trend").checked,
     initial_balance: num("bt-balance"),
     ...btLimits,
   };

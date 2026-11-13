@@ -27,7 +27,8 @@ import requests
 
 from config import settings
 from indicators import analyze_market_signals
-from strategy import STRATEGIES, decide_entry, exit_prices
+from strategy import (STRATEGIES, decide_entry, plan_exits, trend_allows, breakeven_levels,
+                      stop_too_close_to_liquidation, TREND_HISTORY)
 from trading_rules import INTERVAL_SECONDS
 
 WINDOW = 60          # the live bot analyses the last 60 closed candles (limit=61 incl. the open one)
@@ -61,6 +62,11 @@ class BacktestConfig:
     fee_rate: Optional[float] = None      # per side, fraction of notional
     slippage_bps: float = 2.0             # per fill
     cooldown_candles: int = 0             # candles to wait after an exit on the same symbol
+    exit_mode: str = "ROE"                # "ROE" (% of margin) or "ATR" (volatility based)
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 3.0
+    trend_filter: bool = False            # only trade with EMA200 of the same timeframe
+    breakeven_at_r: float = 0.0           # move stop to entry+fees after this many R; 0 = off
     initial_balance: float = 1000.0
     source: str = "live"
     end_ms: Optional[int] = None
@@ -93,12 +99,20 @@ class BacktestConfig:
             raise ValueError("Phí hoặc trượt giá không hợp lệ")
         if self.cooldown_candles < 0:
             raise ValueError("Cooldown không hợp lệ")
+        if self.exit_mode not in ("ROE", "ATR"):
+            raise ValueError("Kiểu TP/SL không hợp lệ")
+        if not (0.3 <= self.atr_sl_mult <= 10 and 0.3 <= self.atr_tp_mult <= 20):
+            raise ValueError("Hệ số ATR không hợp lệ")
+        if self.breakeven_at_r and not 0.5 <= self.breakeven_at_r <= 10:
+            raise ValueError("Dời SL hòa vốn: 0 (tắt) hoặc 0.5R-10R")
         if self.source not in DATA_SOURCES:
             raise ValueError("Nguồn dữ liệu không hợp lệ")
         if self.max_total_margin_usdt is None:
             self.max_total_margin_usdt = self.trade_amount_usdt * self.max_positions
         if self.max_open_risk_usdt is None:
-            self.max_open_risk_usdt = self.trade_amount_usdt * self.max_positions * self.stop_loss_pct / 100
+            # ATR stops vary per trade, so by default only the margin cap limits exposure.
+            self.max_open_risk_usdt = (self.trade_amount_usdt * self.max_positions if self.exit_mode == "ATR"
+                                       else self.trade_amount_usdt * self.max_positions * self.stop_loss_pct / 100)
 
 
 # ----------------------------- data -----------------------------
@@ -138,7 +152,8 @@ def load_data(config: BacktestConfig, fetch=fetch_history):
     step = INTERVAL_SECONDS[config.interval] * 1000
     end_ms = config.end_ms or int(time.time() * 1000) // step * step   # last fully closed boundary
     # Fetch an extra warm-up window so the first tested candle has full indicator history.
-    start_ms = end_ms - config.days * 86_400_000 - WINDOW * step
+    warmup = TREND_HISTORY if config.trend_filter else WINDOW
+    start_ms = end_ms - config.days * 86_400_000 - warmup * step
     with requests.Session() as session:
         return {sym: fetch(sym, config.interval, config.market, start_ms, end_ms, config.source, session)
                 for sym in config.symbols}
@@ -158,6 +173,9 @@ class _Position:
     stop_loss: float
     entry_fee: float
     reason: str
+    breakeven_arm: Optional[float] = None
+    breakeven_stop: Optional[float] = None
+    breakeven_active: bool = False
 
 
 @dataclass
@@ -188,11 +206,14 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
     timeline = sorted({c["time"] for s in series.values() for c in s["candles"]})
 
     open_positions: Dict[str, _Position] = {}
-    pending: Dict[str, tuple] = {}         # symbol -> (direction, reason, signal_close)
+    pending: Dict[str, tuple] = {}         # symbol -> (direction, reason, signal_close, atr)
     cooldown_until: Dict[str, int] = {}
     trades, equity_curve = [], []
     ambiguous = 0
     gap_skips = 0
+    liquidation_skips = 0
+    trend_skips = 0
+    history = TREND_HISTORY if config.trend_filter else WINDOW
 
     def close(pos, candle, raw_price, reason):
         sign = 1 if pos.direction == "LONG" else -1
@@ -212,7 +233,7 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
 
     for t in timeline:
         # 1) Fill entries signalled on the previous candle at this candle's open.
-        for sym, (direction, reason, signal_close) in list(pending.items()):
+        for sym, (direction, reason, signal_close, atr) in list(pending.items()):
             del pending[sym]
             i = series[sym]["index"].get(t)
             if i is None:
@@ -221,19 +242,26 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
             if abs(candle["open"] / signal_close - 1) > 0.01:
                 gap_skips += 1
                 continue
-            used_margin = sum(p.margin for p in open_positions.values())
-            open_risk = sum(abs(p.entry_price - p.stop_loss) * p.quantity for p in open_positions.values())
-            if (len(open_positions) >= config.max_positions
-                    or used_margin + config.trade_amount_usdt > config.max_total_margin_usdt + 1e-9
-                    or open_risk + config.trade_amount_usdt * config.stop_loss_pct / 100
-                    > config.max_open_risk_usdt + 1e-9):
-                continue
             sign = 1 if direction == "LONG" else -1
             price = candle["open"] * (1 + sign * slip)
+            tp, sl = plan_exits(price, direction, exit_mode=config.exit_mode, tp_pct=config.take_profit_pct,
+                                sl_pct=config.stop_loss_pct, leverage=config.leverage, atr=atr,
+                                atr_sl_mult=config.atr_sl_mult, atr_tp_mult=config.atr_tp_mult)
+            if stop_too_close_to_liquidation(price, sl, config.leverage):
+                liquidation_skips += 1
+                continue
+            used_margin = sum(p.margin for p in open_positions.values())
+            open_risk = sum(abs(p.entry_price - p.stop_loss) * p.quantity for p in open_positions.values())
+            new_risk = config.trade_amount_usdt * config.leverage * abs(price - sl) / price
+            if (len(open_positions) >= config.max_positions
+                    or used_margin + config.trade_amount_usdt > config.max_total_margin_usdt + 1e-9
+                    or open_risk + new_risk > config.max_open_risk_usdt + 1e-9):
+                continue
             qty = config.trade_amount_usdt * config.leverage / price
-            tp, sl = exit_prices(price, direction, config.take_profit_pct, config.stop_loss_pct, config.leverage)
+            be = breakeven_levels(price, sl, direction, config.breakeven_at_r, config.market)
             open_positions[sym] = _Position(sym, direction, t, price, qty, config.trade_amount_usdt, tp, sl,
-                                            price * qty * config.fee_rate, reason)
+                                            price * qty * config.fee_rate, reason,
+                                            be[0] if be else None, be[1] if be else None)
 
         # 2) Exits on this candle (including the entry candle itself).
         for sym, pos in list(open_positions.items()):
@@ -242,31 +270,40 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
                 continue
             c = series[sym]["candles"][i]
             long = pos.direction == "LONG"
-            hit_sl = c["low"] <= pos.stop_loss if long else c["high"] >= pos.stop_loss
+            stop = pos.breakeven_stop if pos.breakeven_active else pos.stop_loss
+            hit_sl = c["low"] <= stop if long else c["high"] >= stop
             hit_tp = c["high"] >= pos.take_profit if long else c["low"] <= pos.take_profit
             if hit_sl and hit_tp:
                 ambiguous += 1
             if hit_sl:
-                gapped = c["open"] <= pos.stop_loss if long else c["open"] >= pos.stop_loss
-                close(pos, c, c["open"] if gapped else pos.stop_loss, "STOP_LOSS")
+                gapped = c["open"] <= stop if long else c["open"] >= stop
+                close(pos, c, c["open"] if gapped else stop,
+                      "BREAKEVEN_STOP" if pos.breakeven_active else "STOP_LOSS")
             elif hit_tp:
                 gapped = c["open"] >= pos.take_profit if long else c["open"] <= pos.take_profit
                 close(pos, c, c["open"] if gapped else pos.take_profit, "TAKE_PROFIT")
+            elif pos.breakeven_arm and (c["high"] >= pos.breakeven_arm if long else c["low"] <= pos.breakeven_arm):
+                pos.breakeven_active = True   # takes effect from the next candle (conservative)
 
         # 3) Signals on this closed candle, for symbols without a position.
         for sym, s in series.items():
             i = s["index"].get(t)
-            if i is None or i < WINDOW - 1 or i + 1 >= len(s["candles"]):
+            if i is None or i < history - 1 or i + 1 >= len(s["candles"]):
                 continue
             if sym in open_positions or t * 1000 < cooldown_until.get(sym, 0):
                 continue
             window = s["candles"][i - WINDOW + 1:i + 1]
             if (window[-1]["time"] - window[0]["time"]) * 1000 != (WINDOW - 1) * step:
                 continue   # gap in exchange data; the live bot would refuse this window too
-            decision = decide_entry(config.strategy, analyze_market_signals(window),
-                                    allow_short=config.market == "FUTURES")
+            analysis = analyze_market_signals(window)
+            decision = decide_entry(config.strategy, analysis, allow_short=config.market == "FUTURES")
+            if decision and config.trend_filter:
+                closes = [c["close"] for c in s["candles"][i - TREND_HISTORY + 1:i + 1]]
+                if not trend_allows(decision[0], closes):
+                    trend_skips += 1
+                    decision = None
             if decision:
-                pending[sym] = (decision[0], decision[1], window[-1]["close"])
+                pending[sym] = (decision[0], decision[1], window[-1]["close"], analysis.get("atr"))
 
 
     # Close anything still open at the last close so the result reflects all exposure.
@@ -280,8 +317,9 @@ def run_backtest(config: BacktestConfig, data: Dict[str, List[dict]]) -> Backtes
 
     summary = _summarise(trades, config)
     summary.update(ambiguous_candles=ambiguous, gap_skipped_entries=gap_skips,
-                   candles_tested=max(0, len(timeline) - WINDOW),
-                   period_start=timeline[WINDOW - 1] if len(timeline) >= WINDOW else None,
+                   liquidation_skipped_entries=liquidation_skips, trend_filtered_signals=trend_skips,
+                   candles_tested=max(0, len(timeline) - history),
+                   period_start=timeline[history - 1] if len(timeline) >= history else None,
                    period_end=timeline[-1] if timeline else None)
     if ambiguous:
         warnings.append(f"{ambiguous} nến chạm cả TP và SL; đã giả định SL khớp trước (thận trọng).")
@@ -317,6 +355,11 @@ def _summarise(trades, config, brief=False):
     round_trip_cost = notional * (2 * config.fee_rate + 2 * config.slippage_bps / 10_000)
     tp_usdt = config.trade_amount_usdt * config.take_profit_pct / 100 - round_trip_cost
     sl_usdt = config.trade_amount_usdt * config.stop_loss_pct / 100 + round_trip_cost
+    if config.exit_mode == "ATR" or config.breakeven_at_r:
+        # Distances vary per trade: use the realised average win/loss instead of the formula.
+        breakeven_wr = round(avg_loss / (avg_win + avg_loss) * 100, 2) if avg_win + avg_loss > 0 else 0.0
+    else:
+        breakeven_wr = round(sl_usdt / (tp_usdt + sl_usdt) * 100, 2) if tp_usdt > 0 else 100.0
     out.update({
         "return_pct": round(net / config.initial_balance * 100, 3),
         "avg_win": round(avg_win, 4), "avg_loss": round(avg_loss, 4),
@@ -326,7 +369,7 @@ def _summarise(trades, config, brief=False):
         "max_drawdown_pct": round(max_dd / config.initial_balance * 100, 3),
         "fees_pct_of_gross_abs": round(fees / sum(abs(t["gross_pnl"]) for t in trades) * 100, 2)
         if trades and any(t["gross_pnl"] for t in trades) else 0.0,
-        "breakeven_winrate_pct": round(sl_usdt / (tp_usdt + sl_usdt) * 100, 2) if tp_usdt > 0 else 100.0,
+        "breakeven_winrate_pct": breakeven_wr,
         "net_tp_usdt": round(tp_usdt, 4), "net_sl_usdt": round(-sl_usdt, 4),
     })
     return out
@@ -340,8 +383,13 @@ def backtest(config: BacktestConfig, fetch=fetch_history) -> BacktestResult:
 
 def _print(result: BacktestResult):
     s, c = result.summary, result.config
+    exits = (f"ATR TP {c['atr_tp_mult']}x / SL {c['atr_sl_mult']}x" if c["exit_mode"] == "ATR"
+             else f"TP {c['take_profit_pct']}% / SL {c['stop_loss_pct']}% ROE")
+    extras = "".join([" | EMA200" if c["trend_filter"] else "",
+                      f" | hòa vốn {c['breakeven_at_r']}R" if c["breakeven_at_r"] else "",
+                      f" | nghỉ {c['cooldown_candles']} nến" if c["cooldown_candles"] else ""])
     print(f"\n== {c['strategy']} | {c['market']} {c['leverage']}x | {c['interval']} | {c['days']} ngày | "
-          f"TP {c['take_profit_pct']}% / SL {c['stop_loss_pct']}% ROE | phí {c['fee_rate'] * 100:.3f}%/chiều, "
+          f"{exits}{extras} | phí {c['fee_rate'] * 100:.3f}%/chiều, "
           f"trượt {c['slippage_bps']} bps")
     print(f"Lệnh: {s['trades']}  Thắng: {s['wins']}  Thua: {s['losses']}  Winrate: {s['winrate_pct']}% "
           f"(cần ≥ {s['breakeven_winrate_pct']}% để hòa vốn)")
@@ -377,6 +425,11 @@ def main(argv=None):
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--cooldown", type=int, default=0, help="Số nến chờ sau khi thoát lệnh")
     parser.add_argument("--balance", type=float, default=1000.0)
+    parser.add_argument("--exit-mode", choices=["ROE", "ATR"], default="ROE")
+    parser.add_argument("--atr-sl", type=float, default=1.5, help="SL = hệ số x ATR (chế độ ATR)")
+    parser.add_argument("--atr-tp", type=float, default=3.0, help="TP = hệ số x ATR (chế độ ATR)")
+    parser.add_argument("--trend-filter", action="store_true", help="Chỉ vào lệnh cùng chiều EMA200")
+    parser.add_argument("--breakeven", type=float, default=0.0, help="Dời SL về hòa vốn khi lãi N x R (0 = tắt)")
     parser.add_argument("--source", choices=list(DATA_SOURCES), default="live")
     args = parser.parse_args(argv)
 
@@ -384,7 +437,9 @@ def main(argv=None):
                 leverage=args.leverage, trade_amount_usdt=args.amount, take_profit_pct=args.tp,
                 stop_loss_pct=args.sl, max_positions=args.max_positions,
                 fee_rate=None if args.fee is None else args.fee / 100, slippage_bps=args.slippage_bps,
-                cooldown_candles=args.cooldown, initial_balance=args.balance, source=args.source)
+                cooldown_candles=args.cooldown, initial_balance=args.balance, source=args.source,
+                exit_mode=args.exit_mode, atr_sl_mult=args.atr_sl, atr_tp_mult=args.atr_tp,
+                trend_filter=args.trend_filter, breakeven_at_r=args.breakeven)
     data = load_data(BacktestConfig(strategy=args.strategy[0], **base))   # fetch once, reuse per strategy
     for strategy in args.strategy:
         _print(run_backtest(BacktestConfig(strategy=strategy, **base), data))

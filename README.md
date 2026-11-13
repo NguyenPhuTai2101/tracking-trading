@@ -124,6 +124,32 @@ trình duyệt (hoặc đặt `SESSION_SECRET` riêng để tách khóa phiên k
 Trên Railway (hoặc khi đặt `REQUIRE_AUTH=1`) mà thiếu hai biến trên, ứng dụng trả 503
 cho mọi yêu cầu thay vì mở công khai. Chạy local không đặt biến thì không cần đăng nhập.
 
+### Bot tự chạy lại và lý do dừng
+
+Bot nhớ trạng thái "đang chạy" trong file trạng thái. Sau khi máy chủ khởi động lại
+(redeploy, crash) bot tự chạy lại với đúng các bước kiểm tra như bấm CHẠY (đối soát
+lệnh, SL trên sàn, vị thế), thử lại mỗi 30 giây tối đa 10 lần. Bấm DỪNG hoặc "Đóng tất
+cả" thì không tự chạy lại. Mỗi lần bot dừng, lý do và thời điểm được lưu và hiện dưới
+trạng thái bot; 100 dòng log gần nhất cũng được giữ qua lần khởi động lại.
+
+Đặt SL trên sàn bị từ chối một lần (thường do giá đã vượt SL khi SL quá sát): bot đóng
+vị thế đó và tạm chặn mở mới cho tới khi đóng xong. Bị từ chối 2 lần trong 1 giờ, hoặc
+lệnh SL trên sàn sai thông số, thì bot dừng hẳn và ghi lý do.
+
+### Vào & chốt lệnh
+
+| Tùy chọn | Ý nghĩa |
+|---|---|
+| Kiểu TP/SL `ROE` | TP/SL theo % ký quỹ (cũ): đòn bẩy càng cao khoảng cách giá càng hẹp |
+| Kiểu TP/SL `ATR` | SL = hệ số × ATR, TP = hệ số × ATR của nến tín hiệu, không phụ thuộc đòn bẩy. Bỏ lệnh nếu SL gần giá thanh lý |
+| Lọc EMA200 | Chỉ LONG khi giá trên EMA200, chỉ SHORT khi dưới (cùng khung nến, bot tải 261 nến) |
+| Nghỉ sau khi thoát | Bỏ qua tín hiệu của N nến tính từ nến thoát lệnh trên cùng mã |
+| Dời SL hòa vốn | Khi lãi N×R, bot tự đóng nếu giá quay về giá vào + phí; SL trên sàn giữ nguyên làm lưới an toàn |
+
+Nút **Cấu hình khuyến nghị** (bot Futures): RSI_SCALPING, khung 1h, 3x, ATR 1.5/3, lọc EMA200,
+nghỉ 2 nến. Đây là tổ hợp có drawdown thấp nhất trong các backtest đã chạy, chưa phải lợi thế
+đã được chứng minh; kiểm tra lại ở tab Backtest trước khi dùng.
+
 ### Backtest có tính phí
 
 Tab **Backtest** trên web, hoặc dòng lệnh:
@@ -143,7 +169,7 @@ funding, thanh lý và làm tròn khối lượng. Dữ liệu nến lấy từ 
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth
+python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth test_entry_exit
 ```
 
 Bộ test dùng API giả lập và chặn kết nối mạng ngoài ý muốn. Kiểm tra API Demo

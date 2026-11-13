@@ -15,7 +15,9 @@ from trading_rules import BotConfigRequest, validate_closed_candles
 from config import settings
 from binance_client import binance_client
 from indicators import analyze_market_signals
-from strategy import decide_entry, exit_prices
+from strategy import (decide_entry, plan_exits, trend_allows, breakeven_levels,
+                      stop_too_close_to_liquidation, TREND_HISTORY)
+from trading_rules import INTERVAL_SECONDS
 
 STATE_FILE = str(Path(__file__).resolve().with_name("bot_state.json"))
 
@@ -60,6 +62,23 @@ class TradingBotEngine:
         self.stop_loss_pct = settings.DEFAULT_STOP_LOSS_PCT
         self.take_profit_pct = settings.DEFAULT_TAKE_PROFIT_PCT
         self.scan_interval_sec = settings.DEFAULT_SCAN_INTERVAL_SEC
+        # Entry/exit refinements; defaults keep the original ROE-based behaviour.
+        self.exit_mode = "ROE"
+        self.atr_sl_mult = 1.5
+        self.atr_tp_mult = 3.0
+        self.trend_filter = False
+        self.cooldown_candles = 0
+        self.breakeven_at_r = 0.0
+        # Run intent survives restarts: a redeploy or crash resumes a bot the user left running.
+        self.auto_run = False
+        self.resume_pending = False
+        self.resume_attempts = 0
+        self.next_resume_at = 0.0
+        self.stop_reason = None
+        self.stopped_at = None
+        self.protection_failures: List[float] = []
+        self.last_exit_ms: Dict[str, int] = {}
+        self.last_monitor_log: Dict[str, float] = {}
         
         # State & Metrics
         # active_positions is a map of symbol -> position dict
@@ -121,6 +140,17 @@ class TradingBotEngine:
                 "win_count": self.win_count,
                 "loss_count": self.loss_count,
                 "history_scope": self.history_scope,
+                "exit_mode": self.exit_mode,
+                "atr_sl_mult": self.atr_sl_mult,
+                "atr_tp_mult": self.atr_tp_mult,
+                "trend_filter": self.trend_filter,
+                "cooldown_candles": self.cooldown_candles,
+                "breakeven_at_r": self.breakeven_at_r,
+                "auto_run": self.auto_run,
+                "stop_reason": self.stop_reason,
+                "stopped_at": self.stopped_at,
+                "last_exit_ms": self.last_exit_ms,
+                "logs": self.logs[:100],
             }
             try:
                 with open(f"{self.state_file}.tmp", "w", encoding="utf-8") as f:
@@ -175,6 +205,18 @@ class TradingBotEngine:
                     self.win_count = data.get("win_count", 0)
                     self.loss_count = data.get("loss_count", 0)
                     self.history_scope = data.get("history_scope", "market")
+                    self.exit_mode = data.get("exit_mode", self.exit_mode)
+                    self.atr_sl_mult = data.get("atr_sl_mult", self.atr_sl_mult)
+                    self.atr_tp_mult = data.get("atr_tp_mult", self.atr_tp_mult)
+                    self.trend_filter = data.get("trend_filter", self.trend_filter)
+                    self.cooldown_candles = data.get("cooldown_candles", self.cooldown_candles)
+                    self.breakeven_at_r = data.get("breakeven_at_r", self.breakeven_at_r)
+                    self.auto_run = bool(data.get("auto_run", False))
+                    self.resume_pending = self.auto_run
+                    self.stop_reason = data.get("stop_reason")
+                    self.stopped_at = data.get("stopped_at")
+                    self.last_exit_ms = data.get("last_exit_ms", {})
+                    self.logs = data.get("logs", [])[:200]
                     if self.fixed_market == "SPOT" and self.leverage != 1:
                         raise ValueError("Bot Spot chỉ dùng 1x")
                     BotConfigRequest(
@@ -183,7 +225,10 @@ class TradingBotEngine:
                         strategy=self.strategy, trade_amount_usdt=self.trade_amount_usdt,
                         stop_loss_pct=self.stop_loss_pct, take_profit_pct=self.take_profit_pct,
                         scan_interval_sec=self.scan_interval_sec, interval=self.interval,
-                        max_total_margin_usdt=self.max_total_margin_usdt, max_open_risk_usdt=self.max_open_risk_usdt)
+                        max_total_margin_usdt=self.max_total_margin_usdt, max_open_risk_usdt=self.max_open_risk_usdt,
+                        exit_mode=self.exit_mode, atr_sl_mult=self.atr_sl_mult, atr_tp_mult=self.atr_tp_mult,
+                        trend_filter=self.trend_filter, cooldown_candles=self.cooldown_candles,
+                        breakeven_at_r=self.breakeven_at_r)
                     for sym, pos in self.active_positions.items():
                         if self.fixed_market and pos.get("market_type") != self.fixed_market:
                             raise ValueError("Vị thế thuộc bot khác")
@@ -202,13 +247,17 @@ class TradingBotEngine:
 
     def update_config(self, market_type=None, leverage=None, symbol=None, strategy=None,
                       amount=None, sl=None, tp=None, interval_sec=None, watchlist_symbols=None,
-                      max_positions=None, interval=None, max_total_margin_usdt=None, max_open_risk_usdt=None):
+                      max_positions=None, interval=None, max_total_margin_usdt=None, max_open_risk_usdt=None,
+                      exit_mode=None, atr_sl_mult=None, atr_tp_mult=None, trend_filter=None,
+                      cooldown_candles=None, breakeven_at_r=None):
         request = BotConfigRequest(
             market_type=market_type, leverage=leverage, symbol=symbol, strategy=strategy,
             trade_amount_usdt=amount, stop_loss_pct=sl, take_profit_pct=tp,
             scan_interval_sec=interval_sec, watchlist_symbols=watchlist_symbols,
             max_positions=max_positions, interval=interval,
-            max_total_margin_usdt=max_total_margin_usdt, max_open_risk_usdt=max_open_risk_usdt)
+            max_total_margin_usdt=max_total_margin_usdt, max_open_risk_usdt=max_open_risk_usdt,
+            exit_mode=exit_mode, atr_sl_mult=atr_sl_mult, atr_tp_mult=atr_tp_mult,
+            trend_filter=trend_filter, cooldown_candles=cooldown_candles, breakeven_at_r=breakeven_at_r)
         updates = request.model_dump(exclude_none=True)
         if self.fixed_market and updates.get("market_type", self.fixed_market) != self.fixed_market:
             raise ValueError("Mỗi bot có thị trường cố định. Chọn bot tương ứng để cấu hình.")
@@ -296,15 +345,51 @@ class TradingBotEngine:
                 self.is_running = True
                 self.entries_enabled = True
                 self.last_error = None
+                self.auto_run = True
+                self.resume_pending = False
+                self.resume_attempts = 0
+                self.stop_reason = self.stopped_at = None
+                self.protection_failures = []
+                self.save_state()
             self.supervise()
         return {"success": True, "message": "Đã bật mở lệnh tự động."}
 
     def stop(self):
         # Immediate flag prevents a scan in progress from submitting after the pause.
-        with self.lock:
-            self.is_running = False
+        self._halt("Bạn đã bấm dừng.", by_user=True)
         self.supervise()
         return {"success": True, "message": "Đã dừng mở lệnh mới. Bot tiếp tục theo dõi TP/SL và lệnh chờ."}
+
+    def _halt(self, reason, by_user=False):
+        """Stop opening new trades and remember why, so the UI can explain it after a restart."""
+        with self.lock:
+            was_running = self.is_running or self.resume_pending
+            self.is_running = False
+            self.entries_enabled = False
+            self.auto_run = False
+            self.resume_pending = False
+            if was_running or by_user:
+                self.stop_reason = reason
+                self.stopped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.save_state()
+        if was_running and not by_user:
+            self.add_log("ERROR", f"Bot tự dừng mở lệnh: {reason}")
+
+    def _maybe_resume(self):
+        """After a restart, resume a bot that was running, with the same checks as a manual start."""
+        with self.lock:
+            if not self.resume_pending or self.is_running or time.monotonic() < self.next_resume_at:
+                return
+            self.resume_attempts += 1
+            attempt = self.resume_attempts
+            self.next_resume_at = time.monotonic() + 30
+        result = self.start()
+        if result.get("success"):
+            self.add_log("SUCCESS", "Đã tự chạy lại bot sau khi máy chủ khởi động lại.")
+            return
+        self.add_log("WARN", f"Tự chạy lại lần {attempt} chưa được: {result.get('message')}")
+        if attempt >= 10:
+            self._halt(f"Không tự chạy lại được sau khởi động lại máy chủ: {result.get('message')}")
 
     def shutdown(self):
         with self.lock:
@@ -342,6 +427,7 @@ class TradingBotEngine:
     def _run_loop(self):
         while not self.stop_event.is_set():
             try:
+                self._maybe_resume()
                 self._bot_tick()
                 self.last_error = None
             except Exception as exc:
@@ -429,10 +515,16 @@ class TradingBotEngine:
                     return False
             return True
 
-    def _protection_failure(self, sym, message):
+    def _protection_failure(self, sym, message, halt_now=False):
         # Stop adding exposure and request an orderly close of the unprotected fill.
+        # The unprotected fill is closed either way, and new entries stay blocked until it is
+        # (via _protection_ready). Only repeated failures stop the bot: they point to a
+        # systematic problem rather than one fast-moving candle.
+        now = time.time()
         with self.lock:
-            self.is_running = self.entries_enabled = False
+            self.entries_enabled = False
+            self.protection_failures = [t for t in self.protection_failures if now - t < 3600] + [now]
+            repeated = halt_now or len(self.protection_failures) >= 2
             pos = self.active_positions.get(sym)
             if pos:
                 pos["exit_requested"] = "PROTECTION_FAILED"
@@ -441,7 +533,11 @@ class TradingBotEngine:
                 pending.update(cancel_requested=True, exit_reason="PROTECTION_FAILED")
             self.last_error = message
             self._persist_order_state()
-        self.add_log("ERROR", f"{sym}: {message}. Đã dừng mở mới và yêu cầu đóng vị thế.")
+        self.add_log("ERROR", f"{sym}: {message}. Đang đóng vị thế chưa có SL.")
+        if repeated:
+            self._halt(f"Lệnh SL trên sàn không đúng yêu cầu ({sym}: {message})." if halt_now else
+                       f"Đặt SL trên sàn thất bại 2 lần trong 1 giờ ({sym}: {message}). "
+                       "Kiểm tra SL có quá sát giá (đòn bẩy cao + SL % ROE nhỏ) rồi chạy lại.")
 
     def _ensure_futures_protection(self, sym):
         with self.order_lock:
@@ -467,7 +563,7 @@ class TradingBotEngine:
                     "direction": pos["position_side"], "algo_status": "SUBMITTING",
                 }
                 if not order["trigger_price"] or order["trigger_price"] <= 0:
-                    self._protection_failure(sym, "Thiếu giá cắt lỗ")
+                    self._protection_failure(sym, "Thiếu giá cắt lỗ", halt_now=True)
                     return
                 self.protective_orders[order["id"]] = order
                 if not self._persist_order_state():
@@ -555,7 +651,7 @@ class TradingBotEngine:
                 valid = False
             if not valid:
                 order["cancel_requested"] = True
-                self._protection_failure(sym, "Thông tin lệnh cắt lỗ chưa khớp yêu cầu bảo vệ")
+                self._protection_failure(sym, "Thông tin lệnh cắt lỗ chưa khớp yêu cầu bảo vệ", halt_now=True)
         else:
             self.entries_enabled = False
 
@@ -638,6 +734,21 @@ class TradingBotEngine:
         target_sl = pos.get("target_sl_price")
         hit_tp = (current_price >= target_tp if side == "LONG" else current_price <= target_tp) if target_tp else pnl_pct >= self.take_profit_pct
         hit_sl = (current_price <= target_sl if side == "LONG" else current_price >= target_sl) if target_sl else pnl_pct <= -self.stop_loss_pct
+        # Breakeven: once price has moved breakeven_at_r * risk in our favour, a local stop at
+        # entry + fees protects the trade. The exchange SL stays as the outer safety net.
+        arm, be_stop = pos.get("breakeven_arm_price"), pos.get("breakeven_stop_price")
+        long = side == "LONG"
+        if arm and be_stop and not pos.get("breakeven_active") and (
+                current_price >= arm if long else current_price <= arm):
+            with self.lock:
+                pos["breakeven_active"] = True
+                self.save_state()
+            self.add_log("INFO", f"{sym}: đã lãi {self.breakeven_at_r:g}R, dời SL về hòa vốn ${be_stop:,.4f}.")
+        if pos.get("breakeven_active") and be_stop and not hit_tp and (
+                current_price <= be_stop if long else current_price >= be_stop):
+            self.add_log("SL", f"↩ HÒA VỐN {sym} [{side}]: giá ${current_price:,.4f} quay về mức dời SL.")
+            self._request_exit(sym, pos, "BREAKEVEN_STOP")
+            return
         if hit_tp:
             self.add_log("TP", f"🎯 CHỐT LỜI {sym} [{side}]: Giá ${current_price:,.4f} đạt +{pnl_pct:.2f}% (Lãi: +${pnl_usdt:.2f})")
             self._request_exit(sym, pos, "TAKE_PROFIT")
@@ -649,6 +760,9 @@ class TradingBotEngine:
             self._request_exit(sym, pos, "STOP_LOSS")
             return
 
+        if time.monotonic() - self.last_monitor_log.get(sym, 0) < 60:
+            return   # one MONITOR line a minute per position keeps important logs visible
+        self.last_monitor_log[sym] = time.monotonic()
         self.add_log("MONITOR", f"Đang giữ {sym} [{pos['market_type']} {side} {lev}x] | Giá: ${current_price:,.4f} | PnL: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
 
     def _request_exit(self, sym, pos, reason):
@@ -670,40 +784,54 @@ class TradingBotEngine:
                     or sym in self.active_positions or len(self.active_positions) >= self.max_positions):
                 return
             market, interval = self.market_type, self.interval
+            trend_filter, cooldown = self.trend_filter, self.cooldown_candles
+            last_exit = self.last_exit_ms.get(sym, 0)
         candle_key = f"{market}:{sym}:{interval}"
         now_ms = binance_client._get_timestamp()
         if now_ms < self.next_candle_check_ms.get(candle_key, 0):
             return
-        candles = binance_client.get_klines(sym, interval=interval, limit=61, market=market)
+        limit = TREND_HISTORY + 1 if trend_filter else 61
+        candles = binance_client.get_klines(sym, interval=interval, limit=limit, market=market)
         if candles and not candles[-1]["closed"]:
             self.next_candle_check_ms[candle_key] = candles[-1]["close_time_ms"] + 1
         candles = validate_closed_candles(candles, interval, now_ms)
         close_time = candles[-1]["close_time_ms"]
         if self.last_entry_candle.get(candle_key, 0) >= close_time:
             return
+        # Cooldown: ignore signals from the exit candle and the next `cooldown - 1` candles
+        # (same rule as the backtest).
+        step_ms = INTERVAL_SECONDS[interval] * 1000
+        if cooldown and candles[-1]["time"] * 1000 < last_exit // step_ms * step_ms + cooldown * step_ms:
+            return
 
         current_price = candles[-1]["close"]
-        analysis = analyze_market_signals(candles)
+        # Signals always use the last 60 closed candles, exactly like the backtest.
+        analysis = analyze_market_signals(candles[-60:])
         with self.lock:
             self.last_entry_candle[candle_key] = close_time
-            if not self.save_state():
+            halt = not self.save_state()
+            if halt:
                 self.state_error = True
-                self.is_running = False
-                return
+        if halt:
+            self._halt("Không lưu được trạng thái bot (ổ đĩa/volume).")
+            return
         
         # Save last signal if it's the currently viewed symbol
         if sym == self.symbol:
             self.last_signal = analysis
 
         decision = decide_entry(self.strategy, analysis, allow_short=(market == "FUTURES"))
+        if decision and trend_filter and not trend_allows(decision[0], [c["close"] for c in candles]):
+            self.add_log("SCAN", f"Bỏ tín hiệu {decision[0]} {sym}: ngược xu hướng EMA200.")
+            decision = None
         if decision:
             direction, reason = decision
             self.add_log("SIGNAL", f"🚀 TÍN HIỆU {sym} [{direction}]: {reason} tại giá ${current_price:,.4f}")
-            self._execute_entry(sym, direction, current_price, reason, market=market)
+            self._execute_entry(sym, direction, current_price, reason, market=market, atr=analysis.get("atr"))
         else:
             self.add_log("SCAN", f"Quét {sym} | Giá: ${current_price:,.4f} | RSI: {analysis['rsi']} | Điểm: {analysis['net_score']} | Tín hiệu: {analysis['action']}")
 
-    def _execute_entry(self, sym, direction, current_price, trigger_reason, market=None):
+    def _execute_entry(self, sym, direction, current_price, trigger_reason, market=None, atr=None):
         with self.order_lock:
             with self.lock:
                 market = market or self.market_type
@@ -721,16 +849,24 @@ class TradingBotEngine:
                     "id": uuid4().hex, "market": market, "kind": "entry", "direction": direction,
                     "leverage": leverage, "reason": trigger_reason,
                     "tp_pct": self.take_profit_pct, "sl_pct": self.stop_loss_pct,
+                    "exit_mode": self.exit_mode, "atr": atr,
+                    "atr_sl_mult": self.atr_sl_mult, "atr_tp_mult": self.atr_tp_mult,
+                    "breakeven_at_r": self.breakeven_at_r,
                 }
             if not isfinite(current_price) or current_price <= 0:
+                return
+            _, planned_sl = self._plan_exits(order, current_price)
+            if stop_too_close_to_liquidation(current_price, planned_sl, leverage):
+                self.add_log("WARN", f"Bỏ lệnh {sym}: SL theo ATR quá xa so với đòn bẩy {leverage}x (gần giá thanh lý).")
                 return
             with self.lock:
                 used_margin = sum(p["cost_usdt"] for p in self.active_positions.values())
                 open_risk = sum(abs(p["entry_price"] - p["target_sl_price"]) * p["quantity"]
                                 for p in self.active_positions.values() if p.get("target_sl_price"))
+                new_risk = amount * leverage * abs(current_price - planned_sl) / current_price
                 if used_margin + amount > self.max_total_margin_usdt + 1e-9:
                     raise ValueError("Đã đạt trần tổng vốn của bot")
-                if open_risk + amount * self.stop_loss_pct / 100 > self.max_open_risk_usdt + 1e-9:
+                if open_risk + new_risk > self.max_open_risk_usdt + 1e-9:
                     raise ValueError("Đã đạt trần tổng lỗ dự kiến tại SL")
             qty, current_price = binance_client.prepare_entry(market, sym, amount, leverage, current_price)
             account = binance_client.get_futures_account_info() if market == "FUTURES" else binance_client.get_account_info()
@@ -808,7 +944,8 @@ class TradingBotEngine:
             self.pending_orders[sym] = order
             if not self.save_state():
                 self.state_error = True
-                self.is_running = False
+                self.is_running = self.entries_enabled = self.auto_run = False
+                self.stop_reason = "Không lưu được lệnh trước khi gửi (ổ đĩa/volume)."
                 del self.pending_orders[sym]
                 return {"success": False, "error": "Không lưu được lệnh trước khi gửi."}
         entry = order["kind"] == "entry"
@@ -886,8 +1023,9 @@ class TradingBotEngine:
         if self.save_state():
             return True
         self.state_error = True
-        self.is_running = False
+        self.is_running = self.entries_enabled = self.auto_run = False
         self.last_error = "Không lưu được trạng thái giao dịch"
+        self.stop_reason = "Không lưu được trạng thái giao dịch (ổ đĩa/volume)."
         return False
 
     def _record_entry(self, sym, order, data, qty, quote):
@@ -898,7 +1036,8 @@ class TradingBotEngine:
             quote += existing["notional_usdt"]
         price = quote / qty
         lev = order["leverage"]
-        target_tp, target_sl = exit_prices(price, order["direction"], order["tp_pct"], order["sl_pct"], lev)
+        target_tp, target_sl = self._plan_exits(order, price)
+        breakeven = breakeven_levels(price, target_sl, order["direction"], order.get("breakeven_at_r"), order["market"])
         pos = existing if existing is not None else {}
         pos.update({
             "position_id": pos.get("position_id", order["id"]),
@@ -910,11 +1049,22 @@ class TradingBotEngine:
             "target_sl_price": target_sl,
             "current_pnl_pct": 0.0, "current_pnl_usdt": 0.0,
             "trigger_reason": order["reason"], "order_id": data.get("orderId"),
+            "exit_mode": order.get("exit_mode", "ROE"),
+            "breakeven_arm_price": breakeven[0] if breakeven else None,
+            "breakeven_stop_price": breakeven[1] if breakeven else None,
+            "breakeven_active": pos.get("breakeven_active", False),
         })
         if order.get("cancel_requested"):
             pos["exit_requested"] = order.get("exit_reason", "CANCEL_ENTRY")
         self.active_positions[sym] = pos
         self.add_log("SUCCESS", f"Đã cập nhật khớp lệnh {sym}: {qty:g} @ {price:g}")
+
+    @staticmethod
+    def _plan_exits(order, price):
+        return plan_exits(price, order["direction"], exit_mode=order.get("exit_mode", "ROE"),
+                          tp_pct=order["tp_pct"], sl_pct=order["sl_pct"], leverage=order["leverage"],
+                          atr=order.get("atr"), atr_sl_mult=order.get("atr_sl_mult", 1.5),
+                          atr_tp_mult=order.get("atr_tp_mult", 3.0))
 
     def _record_exit(self, sym, pos, order, qty, quote):
         price = quote / qty
@@ -935,6 +1085,7 @@ class TradingBotEngine:
         self.total_pnl_usdt = round(self.total_pnl_usdt + pnl, 8)
         pos["realized_pnl_usdt"] = pos.get("realized_pnl_usdt", 0) + pnl
         if isclose(qty, pos["quantity"], rel_tol=1e-9):
+            self.last_exit_ms[sym] = int(time.time() * 1000)
             if pos["realized_pnl_usdt"] > 0:
                 self.win_count += 1
             elif pos["realized_pnl_usdt"] < 0:
@@ -949,8 +1100,8 @@ class TradingBotEngine:
         return trade
 
     def close_all_positions(self, exit_reason="MANUAL_CLOSE_ALL"):
+        self._halt("Bạn đã bấm đóng toàn bộ.", by_user=True)
         with self.lock:
-            self.is_running = False
             self.close_all_requested = True
         with self.order_lock:
             if not self.save_state():
@@ -1046,6 +1197,16 @@ class TradingBotEngine:
 
             return {
                 "is_running": self.is_running,
+                "auto_run": self.auto_run,
+                "resume_pending": self.resume_pending,
+                "stop_reason": self.stop_reason,
+                "stopped_at": self.stopped_at,
+                "exit_mode": self.exit_mode,
+                "atr_sl_mult": self.atr_sl_mult,
+                "atr_tp_mult": self.atr_tp_mult,
+                "trend_filter": self.trend_filter,
+                "cooldown_candles": self.cooldown_candles,
+                "breakeven_at_r": self.breakeven_at_r,
                 "monitoring": bool(self.thread and self.thread.is_alive()),
                 "close_all_requested": self.close_all_requested,
                 "last_error": self.last_error,

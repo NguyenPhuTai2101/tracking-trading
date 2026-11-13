@@ -35,3 +35,56 @@ def exit_prices(entry_price: float, direction: str, tp_pct: float, sl_pct: float
     take_profit = entry_price * (1 + sign * tp_pct / leverage / 100)
     stop_loss = entry_price * (1 - sign * sl_pct / leverage / 100)
     return take_profit, stop_loss
+
+
+# ---------------- entry/exit refinements shared by bot and backtest ----------------
+
+TREND_EMA_PERIOD = 200
+TREND_HISTORY = 260          # closed candles needed for a settled EMA200
+# Round-trip taker fees, so a breakeven exit does not turn into a small loss.
+BREAKEVEN_FEE_BUFFER = {"FUTURES": 0.001, "SPOT": 0.002}
+
+
+def plan_exits(entry_price, direction, *, exit_mode="ROE", tp_pct=3.0, sl_pct=1.5, leverage=1,
+               atr=None, atr_sl_mult=1.5, atr_tp_mult=3.0):
+    """Return (take_profit, stop_loss) prices for either exit mode.
+
+    ROE: distances are a % of margin (shrink as leverage grows).
+    ATR: distances follow the market's recent volatility, independent of leverage.
+    """
+    if exit_mode == "ATR":
+        if not atr or atr <= 0:
+            raise ValueError("Thiếu ATR để đặt TP/SL theo biến động")
+        sign = 1 if direction == "LONG" else -1
+        return entry_price + sign * atr * atr_tp_mult, entry_price - sign * atr * atr_sl_mult
+    return exit_prices(entry_price, direction, tp_pct, sl_pct, leverage)
+
+
+def stop_too_close_to_liquidation(entry_price, stop_loss, leverage):
+    """Isolated liquidation sits roughly 1/leverage away; keep the stop well inside it."""
+    return leverage > 1 and abs(entry_price - stop_loss) / entry_price >= 0.8 / leverage
+
+
+def trend_allows(direction, closes, period=TREND_EMA_PERIOD):
+    """Trade only with the slower trend: LONG above EMA(period), SHORT below it."""
+    if len(closes) < period + 20:
+        return False
+    k = 2.0 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for price in closes[period:]:
+        ema += (price - ema) * k
+    return closes[-1] > ema if direction == "LONG" else closes[-1] < ema
+
+
+def breakeven_levels(entry_price, initial_stop, direction, r_multiple, market):
+    """(arm_price, stop_price): once price reaches entry + r_multiple * risk, the stop moves to
+    entry plus fees. Returns None when the feature is off."""
+    if not r_multiple or r_multiple <= 0:
+        return None
+    sign = 1 if direction == "LONG" else -1
+    risk = abs(entry_price - initial_stop)
+    arm = entry_price + sign * risk * r_multiple
+    stop = entry_price * (1 + sign * BREAKEVEN_FEE_BUFFER.get(market, 0.001))
+    if sign * (arm - stop) <= 0:
+        return None   # target too close to cover fees; moving the stop would exit at once
+    return arm, stop

@@ -25,6 +25,13 @@ class BotConfigRequest(BaseModel):
     interval: Optional[str] = None
     max_total_margin_usdt: Optional[float] = Field(default=None, ge=5)
     max_open_risk_usdt: Optional[float] = Field(default=None, gt=0)
+    # Entry/exit refinements (see strategy.py). Defaults keep the original behaviour.
+    exit_mode: Optional[Literal["ROE", "ATR"]] = None
+    atr_sl_mult: Optional[float] = Field(default=None, ge=0.3, le=10)
+    atr_tp_mult: Optional[float] = Field(default=None, ge=0.3, le=20)
+    trend_filter: Optional[bool] = None
+    cooldown_candles: Optional[int] = Field(default=None, ge=0, le=100)
+    breakeven_at_r: Optional[float] = Field(default=None, ge=0, le=10)
 
     @field_validator("watchlist_symbols")
     @classmethod
@@ -36,6 +43,13 @@ class BotConfigRequest(BaseModel):
         if any(not re.fullmatch(r"[A-Z0-9]{2,30}USDT", s) for s in normalized):
             raise ValueError("Watchlist chứa mã không hợp lệ")
         return normalized
+
+    @field_validator("breakeven_at_r")
+    @classmethod
+    def validate_breakeven(cls, value):
+        if value is not None and 0 < value < 0.5:
+            raise ValueError("Dời SL về hòa vốn: đặt 0 (tắt) hoặc từ 0.5R trở lên")
+        return value
 
     @field_validator("interval")
     @classmethod

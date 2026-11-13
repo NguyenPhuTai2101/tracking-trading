@@ -222,6 +222,38 @@ function setBotSaveStatus(message, tone = "info") {
   el.className = `text-xs mt-2 min-h-[1rem] ${tone === "error" ? "text-red-400" : tone === "ok" ? "text-emerald-400" : "text-gray-400"}`;
 }
 
+function toggleExitModeFields() {
+  const atr = document.getElementById("bot-exit-mode").value === "ATR";
+  document.querySelectorAll(".atr-field").forEach(el => el.classList.toggle("opacity-40", !atr));
+  ["bot-tp", "bot-sl"].forEach(id => { document.getElementById(id).disabled = atr; });
+  document.getElementById("bot-exit-hint").textContent = atr
+    ? "TP/SL tính theo ATR của nến tín hiệu nên không phụ thuộc đòn bẩy. Ô TP/SL % ROE bị bỏ qua. Bot bỏ lệnh nếu SL quá gần giá thanh lý."
+    : "TP/SL % ROE: đòn bẩy càng cao thì khoảng cách giá càng hẹp (10x: SL 1.5% ROE = giá chạy 0.15%).";
+}
+
+// Best balance of return and drawdown in the fee-aware backtests (1h, RSI + EMA200 + ATR stops).
+function applyRecommendedPreset() {
+  if (selectedBotMarket === "SPOT") {
+    setBotSaveStatus("Cấu hình khuyến nghị dành cho bot FUTURES (cần lệnh SHORT và đòn bẩy).", "error");
+    return;
+  }
+  selectStrategy("RSI_SCALPING");
+  setBotLeverage(3);
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  set("bot-timeframe", "1h");
+  set("bot-exit-mode", "ATR");
+  set("bot-atr-sl", 1.5);
+  set("bot-atr-tp", 3);
+  set("bot-cooldown", 2);
+  set("bot-breakeven", 0);
+  set("bot-total-budget", Math.max(60, Number(document.getElementById("bot-amount").value || 20) * state.maxPositions));
+  set("bot-risk-budget", 5);
+  document.getElementById("bot-trend-filter").checked = true;
+  toggleExitModeFields();
+  markBotDirty();
+  setBotSaveStatus("Đã điền cấu hình khuyến nghị: RSI + EMA200, khung 1h, 3x, SL 1.5×ATR / TP 3×ATR, nghỉ 2 nến. Bấm Lưu để áp dụng.");
+}
+
 function markBotDirty() {
   botConfigDirty = true;
   botDrafts[selectedBotMarket] = readBotDraft();
@@ -242,6 +274,9 @@ function readBotDraft() {
     trade_amount_usdt: value("bot-amount"), scan_interval_sec: value("bot-interval"),
     take_profit_pct: value("bot-tp"), stop_loss_pct: value("bot-sl"),
     max_total_margin_usdt: value("bot-total-budget"), max_open_risk_usdt: value("bot-risk-budget"),
+    exit_mode: value("bot-exit-mode"), atr_sl_mult: value("bot-atr-sl"), atr_tp_mult: value("bot-atr-tp"),
+    cooldown_candles: value("bot-cooldown"), breakeven_at_r: value("bot-breakeven"),
+    trend_filter: document.getElementById("bot-trend-filter").checked,
   };
 }
 
@@ -303,8 +338,12 @@ function applyBotConfig(bot, draft = false) {
     "bot-amount": bot.trade_amount_usdt, "bot-interval": bot.scan_interval_sec,
     "bot-tp": bot.take_profit_pct, "bot-sl": bot.stop_loss_pct,
     "bot-total-budget": bot.max_total_margin_usdt, "bot-risk-budget": bot.max_open_risk_usdt,
+    "bot-exit-mode": bot.exit_mode || "ROE", "bot-atr-sl": bot.atr_sl_mult ?? 1.5, "bot-atr-tp": bot.atr_tp_mult ?? 3,
+    "bot-cooldown": bot.cooldown_candles ?? 0, "bot-breakeven": bot.breakeven_at_r ?? 0,
   };
   for (const [id, value] of Object.entries(fields)) document.getElementById(id).value = value;
+  document.getElementById("bot-trend-filter").checked = Boolean(bot.trend_filter);
+  toggleExitModeFields();
   document.getElementById("leverage-display-val").textContent = `${bot.leverage}x`;
   document.getElementById("max-pos-display").textContent = `${bot.max_positions} lệnh`;
   document.querySelectorAll(".strategy-card").forEach(el => el.classList.toggle("selected", el.id === `strat-${bot.strategy}`));
@@ -868,7 +907,8 @@ function renderSelectedBot(bot) {
     document.querySelectorAll(".selected-bot-label").forEach(el => el.textContent = `Bot ${selectedBotMarket}`);
 
     const configKeys = ["market_type", "leverage", "interval", "watchlist_symbols", "max_positions", "strategy",
-      "trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt"];
+      "trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt",
+      "exit_mode", "atr_sl_mult", "atr_tp_mult", "trend_filter", "cooldown_candles", "breakeven_at_r"];
     if (!botConfig || (!botConfigDirty && !botSaveInFlight && configKeys.some(key => JSON.stringify(botConfig[key]) !== JSON.stringify(bot[key])))) {
       applyBotConfig(bot);
     }
@@ -882,6 +922,15 @@ function renderSelectedBot(bot) {
       bot.futures_protection_ready === false ? "Đang xác nhận bảo vệ SL Futures. Đã chặn mở mới." :
       bot.monitoring ? "Giám sát vị thế đang hoạt động." : "Giám sát vị thế đang dừng."
     );
+
+    const stopReason = document.getElementById("bot-stop-reason");
+    if (stopReason) {
+      const text = bot.resume_pending
+        ? "Máy chủ vừa khởi động lại: bot đang tự chạy lại sau khi kiểm tra vị thế và SL..."
+        : (!bot.is_running && bot.stop_reason ? `Dừng lúc ${bot.stopped_at || "?"}: ${bot.stop_reason}` : "");
+      stopReason.textContent = text;
+      stopReason.classList.toggle("hidden", !text);
+    }
 
     // Exchange positions with no bot record (e.g. manual trades). Closing them is opt-in per symbol.
     untrackedPositions = Object.entries(bot.position_mismatches || {})
@@ -1165,7 +1214,8 @@ async function saveBotConfig() {
   }
   const market = selectedBotMarket;
   const payload = readBotDraft();
-  for (const key of ["trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt"]) payload[key] = Number(payload[key]);
+  for (const key of ["trade_amount_usdt", "scan_interval_sec", "take_profit_pct", "stop_loss_pct", "max_total_margin_usdt", "max_open_risk_usdt",
+                     "atr_sl_mult", "atr_tp_mult", "cooldown_candles", "breakeven_at_r"]) payload[key] = Number(payload[key]);
   botSaveInFlight = true;
   setBotSaveStatus("Đang lưu...");
   document.getElementById("bot-settings-fields").disabled = true;

@@ -376,6 +376,12 @@ def update_bot_config(req: BotConfigRequest, market: Market):
         interval=req.interval,
         max_total_margin_usdt=req.max_total_margin_usdt,
         max_open_risk_usdt=req.max_open_risk_usdt,
+        exit_mode=req.exit_mode,
+        atr_sl_mult=req.atr_sl_mult,
+        atr_tp_mult=req.atr_tp_mult,
+        trend_filter=req.trend_filter,
+        cooldown_candles=req.cooldown_candles,
+        breakeven_at_r=req.breakeven_at_r,
     )
     if not saved:
         raise HTTPException(status_code=503, detail="Không lưu được cấu hình bot.")
@@ -439,6 +445,11 @@ class BacktestRequest(BaseModel):
     fee_pct: Optional[float] = Field(None, ge=0, lt=1, allow_inf_nan=False)
     slippage_bps: float = Field(2, ge=0, le=100, allow_inf_nan=False)
     cooldown_candles: int = Field(0, ge=0, le=100)
+    exit_mode: Literal["ROE", "ATR"] = "ROE"
+    atr_sl_mult: float = Field(1.5, ge=0.3, le=10, allow_inf_nan=False)
+    atr_tp_mult: float = Field(3.0, ge=0.3, le=20, allow_inf_nan=False)
+    trend_filter: bool = False
+    breakeven_at_r: float = Field(0, ge=0, le=10, allow_inf_nan=False)
     initial_balance: float = Field(1000, gt=0, allow_inf_nan=False)
     source: Literal["live", "demo"] = "live"
 
