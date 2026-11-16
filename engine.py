@@ -1,7 +1,10 @@
 """Futures bot engine (USDT-M, one-way mode).
 
-strategy.py proposes a trade, risk.py approves and sizes it, this module executes it and
-keeps the bot's books equal to the exchange:
+strategy.py recognises market cases (setups), risk.py approves and sizes a trade, this module
+executes it and keeps the bot's books equal to the exchange:
+
+- Every setup is scanned on its own timeframe. Setups listed in the config are traded; the
+  rest are only reported, so their behaviour can be watched before any money follows them.
 
 - Every order is journalled before it is sent. An unknown result is looked up by client id,
   never resent.
@@ -28,7 +31,7 @@ import risk
 import strategy
 from indicators import atr
 from risk import RiskConfig
-from strategy import REGIME_HISTORY, REGIME_INTERVAL, SIGNAL_HISTORY, SIGNAL_INTERVAL, StrategyParams
+from strategy import REGIME_HISTORY, SETUPS, SIGNAL_HISTORY, StrategyParams
 
 MARKET = "FUTURES"
 BTC = "BTCUSDT"
@@ -181,6 +184,10 @@ class TradingEngine:
             self.stop_reason = data.get("stop_reason")
             self.stopped_at = data.get("stopped_at")
             for sym, pos in self.positions.items():
+                # Positions saved before setups existed were all trend pullbacks on 1h.
+                pos.setdefault("setup", "TREND_PULLBACK")
+                pos.setdefault("interval", SETUPS[pos["setup"]].interval)
+                pos["plan"].setdefault("exit", strategy.trend_exit(self.config.strategy))
                 numbers = [float(pos["quantity"]), float(pos["entry_price"]), float(pos["plan"]["stop"])]
                 if (pos["symbol"] != sym or pos["direction"] not in ("LONG", "SHORT")
                         or any(not isfinite(n) or n <= 0 for n in numbers)):
@@ -458,15 +465,15 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ scanning & entry
 
-    def _regime(self, sym, now_ms):
-        cached = self.regime_cache.get(sym)
+    def _regime(self, sym, interval, now_ms):
+        cached = self.regime_cache.get((sym, interval))
         if cached and now_ms < cached[1]:
             return cached[0]
-        candles = self.client.get_klines(sym, interval=REGIME_INTERVAL, limit=REGIME_HISTORY + 1, market=MARKET)
-        closed = strategy.closed_candles(candles, REGIME_INTERVAL, now_ms, minimum=1)
+        candles = self.client.get_klines(sym, interval=interval, limit=REGIME_HISTORY + 1, market=MARKET)
+        closed = strategy.closed_candles(candles, interval, now_ms, minimum=1)
         value = strategy.regime_series(closed, self.config.strategy)[-1]
-        valid_until = closed[-1]["close_time_ms"] + strategy.INTERVAL_SECONDS[REGIME_INTERVAL] * 1000
-        self.regime_cache[sym] = (value, valid_until)
+        valid_until = closed[-1]["close_time_ms"] + strategy.INTERVAL_SECONDS[interval] * 1000
+        self.regime_cache[(sym, interval)] = (value, valid_until)
         return value
 
     def _can_enter(self, sym):
@@ -475,49 +482,72 @@ class TradingEngine:
                 and sym not in self.positions and self._protection_ready())
 
     def _scan_symbol(self, sym):
+        """Look for every known case on its own timeframe. Traded setups may open a position;
+        the others are only reported."""
         with self.lock:
-            if not self._can_enter(sym):
+            if not self.is_running or not self.entries_enabled:
                 return
             params, cooldown = self.config.strategy, self.config.risk.cooldown_candles
             last_exit = self.last_exit_ms.get(sym, 0)
         now_ms = self.client._get_timestamp()
-        if now_ms < self.next_candle_check_ms.get(sym, 0):
+        for interval in sorted({s.interval for s in SETUPS.values()}, key=strategy.INTERVAL_SECONDS.get):
+            self._scan_interval(sym, interval, now_ms, params, cooldown, last_exit)
+
+    def _scan_interval(self, sym, interval, now_ms, params, cooldown, last_exit):
+        key = f"{sym}:{interval}"
+        if now_ms < self.next_candle_check_ms.get(key, 0):
             return
-        candles = self.client.get_klines(sym, interval=SIGNAL_INTERVAL, limit=SIGNAL_HISTORY + 1, market=MARKET)
+        candles = self.client.get_klines(sym, interval=interval, limit=SIGNAL_HISTORY + 1, market=MARKET)
         if candles and not candles[-1]["closed"]:
-            self.next_candle_check_ms[sym] = candles[-1]["close_time_ms"] + 1
-        closed = strategy.closed_candles(candles, SIGNAL_INTERVAL, now_ms, minimum=80)
+            self.next_candle_check_ms[key] = candles[-1]["close_time_ms"] + 1
+        closed = strategy.closed_candles(candles, interval, now_ms, minimum=80)
         close_time = closed[-1]["close_time_ms"]
-        if self.last_signal_candle.get(sym, 0) >= close_time:
+        if self.last_signal_candle.get(key, 0) >= close_time:
             return
-        regime, btc_regime = self._regime(sym, now_ms), self._regime(BTC, now_ms)
-        step_ms = strategy.INTERVAL_SECONDS[SIGNAL_INTERVAL] * 1000
-        cooling = cooldown and closed[-1]["time"] * 1000 < last_exit // step_ms * step_ms + cooldown * step_ms
-        if cooling:
-            signal, note = None, f"Nghỉ {cooldown} nến sau lệnh vừa đóng"
-        else:
-            signal, note = strategy.evaluate(closed, strategy.signal_indicators(closed), len(closed) - 1,
-                                             regime, btc_regime, params)
+        ind, last = strategy.signal_indicators(closed, params), len(closed) - 1
+        step_ms = strategy.INTERVAL_SECONDS[interval] * 1000
+        cooling = bool(cooldown) and closed[-1]["time"] * 1000 < last_exit // step_ms * step_ms + cooldown * step_ms
+        cases, chosen, observed = {}, None, []
+        for setup in SETUPS.values():
+            if setup.interval != interval:
+                continue
+            regime = self._regime(sym, setup.regime_interval, now_ms)
+            signal, note = strategy.evaluate(setup.key, closed, ind, last, regime,
+                                             self._regime(BTC, setup.regime_interval, now_ms), params)
+            traded = setup.key in params.setups
+            if signal and traded and not cooling and chosen is None:
+                chosen = signal
+            elif signal:
+                why = "chỉ quan sát" if not traded else f"đang nghỉ {cooldown} nến sau lệnh vừa đóng" if cooling \
+                    else "đã có tín hiệu khác ưu tiên hơn"
+                observed.append((setup, signal, why))
+                note = f"{note} ({why})"
+            cases[setup.key] = {"setup": setup.key, "interval": interval, "traded": traded, "regime": regime,
+                                "note": note, "signal": signal.direction if signal else None, "time": close_time}
         with self.lock:
-            self.last_signal_candle[sym] = close_time
-            self.scan_board[sym] = {"symbol": sym, "time": close_time, "price": closed[-1]["close"],
-                                    "regime": regime, "btc_regime": btc_regime, "note": note,
-                                    "signal": signal.direction if signal else None}
+            self.last_signal_candle[key] = close_time
+            board = self.scan_board.setdefault(sym, {"symbol": sym, "cases": {}, "tags": {}})
+            board["cases"].update(cases)
+            board["tags"][interval] = strategy.market_tags(ind, last)
+            board.update(price=closed[-1]["close"], time=close_time)
             if not self.save_state():
                 self.state_error = True
         if self.state_error:
             self._halt("Không lưu được trạng thái bot (ổ đĩa/volume).")
             return
-        if signal:
-            self.add_log("SIGNAL", f"🚀 {sym} {signal.direction} @ {signal.price:g}: {signal.reason}, "
-                                   f"SL {signal.stop:g}")
-            self._execute_entry(sym, signal)
+        for setup, signal, why in observed:
+            self.add_log("CASE", f"👁 {sym} {interval}: «{setup.label}» {signal.direction} @ {signal.price:g} ({why}).")
+        if chosen:
+            self.add_log("SIGNAL", f"🚀 {sym} {interval}: «{SETUPS[chosen.setup].label}» {chosen.direction} @ "
+                                   f"{chosen.price:g}, SL {chosen.stop:g}. {chosen.reason}")
+            self._execute_entry(sym, chosen)
 
     def _skip(self, sym, signal, reason):
         self.add_log("SKIP", f"Bỏ tín hiệu {sym} {signal.direction}: {reason}")
         with self.lock:
-            if sym in self.scan_board:
-                self.scan_board[sym]["note"] = f"Có tín hiệu nhưng bị chặn: {reason}"
+            case = self.scan_board.get(sym, {}).get("cases", {}).get(signal.setup)
+            if case:
+                case["note"] = f"Có tín hiệu nhưng mô hình vốn chặn: {reason}"
 
     def _execute_entry(self, sym, signal):
         s = _sign(signal.direction)
@@ -555,7 +585,8 @@ class TradingEngine:
                 return
             order = {"id": uuid4().hex, "market": MARKET, "kind": "entry", "direction": signal.direction,
                      "leverage": cfg.leverage, "reason": signal.reason, "regime": signal.regime,
-                     "stop_price": signal.stop, "signal_price": signal.price}
+                     "stop_price": signal.stop, "signal_price": signal.price, "setup": signal.setup,
+                     "interval": SETUPS[signal.setup].interval, "exit": dict(signal.exit)}
             with self.lock:
                 if not self.is_running or self.close_all_requested or self.stop_event.is_set():
                     return
@@ -597,6 +628,11 @@ class TradingEngine:
                                f"({reason}, {pos['r_now']:+.2f}R)")
             self._request_exit(sym, pos, reason)
             return
+        if event and event[0] == "TARGET":
+            self.add_log("TP", f"🎯 {sym} {pos['direction']}: giá {price:g} chạm mục tiêu {event[1]:g} "
+                               f"({pos['r_now']:+.2f}R)")
+            self._request_exit(sym, pos, "TAKE_PROFIT")
+            return
         if event and event[0] == "PARTIAL":
             self._take_partial(sym, pos, price)
             return
@@ -605,11 +641,11 @@ class TradingEngine:
             self._sync_exchange_stop(sym, pos, price)
 
     def _advance_position(self, sym, pos, price):
-        """Feed newly closed 1h candles to the exit plan: breakeven, trailing stop, time stop."""
+        """Feed newly closed candles of the setup's timeframe to the exit plan: breakeven, trailing stop, time stop."""
         now_ms = self.client._get_timestamp()
         if now_ms < self.next_advance_ms.get(sym, 0):
             return
-        candles = self.client.get_klines(sym, interval=SIGNAL_INTERVAL, limit=100, market=MARKET)
+        candles = self.client.get_klines(sym, interval=pos["interval"], limit=100, market=MARKET)
         if not candles:
             return
         self.next_advance_ms[sym] = candles[-1]["close_time_ms"] + 1 if not candles[-1]["closed"] else now_ms + 5000
@@ -622,7 +658,7 @@ class TradingEngine:
             for i, candle in enumerate(closed):
                 if candle["close_time_ms"] <= seen:
                     continue
-                outcome = strategy.advance(plan, candle, volatility[i], self.config.strategy)
+                outcome = strategy.advance(plan, candle, volatility[i])
                 pos["last_candle_ms"] = seen = candle["close_time_ms"]
                 advanced = True
                 if outcome:
@@ -636,7 +672,7 @@ class TradingEngine:
             kind = "hòa vốn" if plan["stop_kind"] == "BREAKEVEN" else "trailing"
             self.add_log("INFO", f"{sym}: dời SL ({kind}) {before:g} → {plan['stop']:g}.")
         if outcome == "TIME_STOP":
-            self.add_log("EXIT", f"⏱ {sym}: sau {plan['bars']} nến chưa đạt {strategy.TIME_STOP_MIN_R:g}R, đóng lệnh.")
+            self.add_log("EXIT", f"⏱ {sym}: hết thời gian giữ lệnh sau {plan['bars']} nến {pos['interval']}, đóng lệnh.")
             self._request_exit(sym, pos, "TIME_STOP")
 
     def _sync_exchange_stop(self, sym, pos, price):
@@ -652,8 +688,8 @@ class TradingEngine:
             self._persist()
 
     def _take_partial(self, sym, pos, price):
-        fraction = self.config.strategy.partial_fraction
         plan = pos["plan"]
+        fraction = plan["exit"].get("partial_fraction") or 0
         try:
             qty = float(self.client.format_futures_quantity(sym, pos["quantity"] * fraction, market_order=True))
             rest = float(self.client.format_futures_quantity(sym, pos["quantity"] - qty, market_order=True))
@@ -670,7 +706,7 @@ class TradingEngine:
             pos["partial_requested"] = qty
             if not self._persist():
                 return
-        self.add_log("TP", f"🎯 {sym} {pos['direction']}: đạt {self.config.strategy.partial_r:g}R tại {price:g}, "
+        self.add_log("TP", f"🎯 {sym} {pos['direction']}: đạt {plan['exit'].get('partial_r', 0):g}R tại {price:g}, "
                            f"chốt {fraction * 100:g}% vị thế.")
         result = self._close_position(sym, "PARTIAL_TP", expected_position=pos, quantity=qty)
         if not result["success"] and not result.get("pending"):
@@ -915,15 +951,16 @@ class TradingEngine:
             "position_id": order["id"], "symbol": sym, "direction": order["direction"],
             "leverage": order["leverage"], "entry_time_ms": _now_ms(), "last_candle_ms": 0,
             "realized_pnl": 0.0, "exit_notional": 0.0, "reason": order["reason"], "regime": order.get("regime"),
+            "setup": order["setup"], "interval": order["interval"],
         }
         try:
-            plan = strategy.new_plan(order["direction"], price, order["stop_price"], self.config.strategy)
+            plan = strategy.new_plan(order["direction"], price, order["stop_price"], order["exit"])
         except ValueError:
-            # Filled on the wrong side of the stop: there is no valid trade, close it at once.
+            # Filled beyond the stop or the target: there is no valid trade, close it at once.
             plan = {"direction": order["direction"], "entry": price, "initial_stop": order["stop_price"],
                     "stop": order["stop_price"], "r": max(abs(price - order["stop_price"]), price * 1e-4),
-                    "tp1": price, "best": price, "bars": 0, "stop_kind": "INITIAL",
-                    "breakeven_done": True, "partial_done": True}
+                    "tp1": None, "best": price, "bars": 0, "stop_kind": "INITIAL",
+                    "breakeven_done": True, "partial_done": True, "exit": {}}
             pos["exit_requested"] = "INVALID_STOP"
         cost = self.config.risk.round_trip_cost
         pos.update({
@@ -936,7 +973,7 @@ class TradingEngine:
         if order.get("cancel_requested"):
             pos["exit_requested"] = order.get("exit_reason", "CANCEL_ENTRY")
         self.positions[sym] = pos
-        self.add_log("SUCCESS", f"✅ Mở {order['direction']} {sym}: {qty:g} @ {price:g}, SL {plan['stop']:g}, "
+        self.add_log("SUCCESS", f"✅ Mở {order['direction']} {sym} ({SETUPS[order['setup']].label}): {qty:g} @ {price:g}, SL {plan['stop']:g}, "
                                 f"1R = {pos['risk_usdt']:.2f} USDT")
 
     def _record_exit(self, sym, pos, order, qty, quote):
@@ -970,7 +1007,7 @@ class TradingEngine:
             "quantity": pos["initial_quantity"], "gross_pnl": round(pos["realized_pnl"], 8),
             "fees": round(fees, 8), "net_pnl": round(net, 8), "risk_usdt": round(pos["risk_usdt"], 8),
             "r_multiple": round(net / pos["risk_usdt"], 4) if pos["risk_usdt"] > 0 else 0.0,
-            "reason": reason, "bars": pos["plan"]["bars"],
+            "reason": reason, "bars": pos["plan"]["bars"], "setup": pos["setup"],
         })
         tripped = risk.record_trade(self.risk_state, net, cfg)
         self.last_exit_ms[sym] = now
@@ -1196,6 +1233,8 @@ class TradingEngine:
                 "positions": positions,
                 "pending_orders": deepcopy(self.pending_orders),
                 "protection_ready": self._protection_ready(),
-                "scan_board": [self.scan_board[s] for s in self.config.watchlist if s in self.scan_board],
+                "scan_board": [{**self.scan_board[s], "cases": [self.scan_board[s]["cases"][k] for k in SETUPS
+                                                              if k in self.scan_board[s]["cases"]]}
+                               for s in self.config.watchlist if s in self.scan_board],
                 "pnl_basis": "net_of_estimated_fees_before_funding",
             }

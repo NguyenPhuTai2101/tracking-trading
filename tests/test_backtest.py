@@ -10,6 +10,7 @@ from tests.helpers import HOUR, candles_from_closes
 SYM = "ETHUSDT"
 WARMUP = 20
 NO_SLIPPAGE = RiskConfig(slippage_rate=0)
+PULLBACK = StrategyParams(setups=["TREND_PULLBACK"])            # a 1h setup: the simulation ticks hourly
 
 
 class BacktestTests(unittest.TestCase):
@@ -19,23 +20,22 @@ class BacktestTests(unittest.TestCase):
         # Wicks of 0.5 give an ATR of 1.0, so a 2-point stop is 2 ATR: inside the 3 ATR trail.
         self.candles = candles_from_closes([100.0] * 220, wick=0.5)
         self.signals = {}
-        index = {c["time"]: i for i, c in enumerate(self.candles)}
 
-        def fake_evaluate(candles, ind, i, regime, btc_regime, params):
-            return self.signals.get(index[candles[i]["time"]]), ""
+        def fake_evaluate(setup, candles, ind, i, regime, btc_regime, params):
+            return self.signals.get((setup, candles[i]["time"])), ""
 
         patcher = patch.object(strategy, "evaluate", fake_evaluate)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def long(self, at, stop=98.0):
-        self.signals[at] = Signal("LONG", 100.0, stop, 1.0, "UP", "test")
+    def long(self, at, stop=98.0, exit=None):
+        rules = exit or strategy.trend_exit(PULLBACK)
+        self.signals[("TREND_PULLBACK", self.candles[at]["time"])] = Signal("LONG", 100.0, stop, 1.0, "UP", "test", exit=rules)
 
-    def run_bt(self, risk=NO_SLIPPAGE, funding=None, params=None):
-        data = {"start_ms": self.candles[WARMUP]["time"] * 1000,
-                "end_ms": self.candles[-1]["close_time_ms"] + 1,
-                "signal": {SYM: self.candles}, "regime": {}, "funding": {SYM: funding or []}, "funding_ok": True}
-        config = backtest.BacktestConfig([SYM], days=8, risk=risk, strategy=params or StrategyParams())
+    def run_bt(self, risk=NO_SLIPPAGE, funding=None):
+        data = {"start_ms": self.candles[WARMUP]["time"] * 1000, "end_ms": self.candles[-1]["close_time_ms"] + 1,
+                "candles": {"1h": {SYM: self.candles}}, "funding": {SYM: funding or []}, "funding_ok": True}
+        config = backtest.BacktestConfig([SYM], days=8, risk=risk, strategy=PULLBACK)
         return backtest.run_backtest(config, data)
 
     def test_stop_out_costs_one_r_and_fees_are_charged_both_sides(self):
@@ -46,6 +46,7 @@ class BacktestTests(unittest.TestCase):
         quantity = 7.5 / (0.02 + 0.001) / 100             # 0.75% of 1000 over a 2% stop + 0.1% fees
         self.assertEqual(trade["entry_time"], self.candles[51]["time"] * 1000)     # next candle's open
         self.assertEqual((trade["entry_price"], trade["exit_price"], trade["reason"]), (100.0, 98.0, "STOP_LOSS"))
+        self.assertEqual(trade["setup"], "TREND_PULLBACK")
         self.assertAlmostEqual(trade["quantity"], quantity)
         self.assertAlmostEqual(trade["fees"], quantity * (100 + 98) * 0.0005, places=5)
         self.assertAlmostEqual(trade["net_pnl"], -2 * quantity - trade["fees"], places=5)
@@ -80,6 +81,18 @@ class BacktestTests(unittest.TestCase):
         self.assertGreater(trade["r_multiple"], 0.8)
         self.assertEqual(result["summary"]["wins"], 1)
 
+    def test_target_exit_closes_the_whole_position_at_the_target(self):
+        self.long(50, exit=strategy.target_exit(103.0, max_bars=10))
+        self.candles[53]["high"] = 103.4
+        (trade,) = self.run_bt()["trades"]
+        self.assertEqual((trade["reason"], trade["exit_price"], trade["bars"]), ("TAKE_PROFIT", 103.0, 2))
+        self.assertAlmostEqual(trade["r_multiple"], 1.38, delta=0.02)      # +3 on a 2-point stop, less fees
+
+    def test_target_trade_times_out_at_max_bars(self):
+        self.long(50, exit=strategy.target_exit(103.0, max_bars=4))
+        (trade,) = self.run_bt()["trades"]
+        self.assertEqual((trade["reason"], trade["bars"], trade["exit_price"]), ("TIME_STOP", 4, 100.0))
+
     def test_entry_skipped_when_the_open_runs_away_or_sits_on_the_stop(self):
         self.long(50)
         self.candles[51].update(open=101.5, high=101.7, close=101.5)    # +1.5% from the signal close
@@ -108,10 +121,10 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(len(self.run_bt()["trades"]), 1)
 
     def test_funding_is_paid_only_while_the_position_is_open(self):
-        self.long(50)
+        self.long(50, exit=strategy.trail_exit(8.0))                     # nothing closes it before the end
         funding = [(self.candles[40]["time"] * 1000 + 1, 0.01),          # before the entry: ignored
                    (self.candles[55]["time"] * 1000 + 1, 0.001)]
-        result = self.run_bt(funding=funding, params=StrategyParams(time_stop_bars=200))
+        result = self.run_bt(funding=funding)
         (trade,) = result["trades"]
         self.assertEqual(trade["reason"], "END_OF_TEST")
         self.assertAlmostEqual(trade["funding"], -trade["quantity"] * 100 * 0.001, places=5)
@@ -128,12 +141,63 @@ class BacktestTests(unittest.TestCase):
         self.assertTrue(any("chưa đủ để kết luận" in w for w in result["warnings"]))
         self.assertEqual(result["buy_hold"]["average_pct"], 0.0)
         self.assertAlmostEqual(result["equity_curve"][-1]["equity"], result["summary"]["final_equity"], places=2)
+        self.assertEqual(result["by_setup"][0]["setup"], "TREND_PULLBACK")
 
     def test_config_validation(self):
         for bad in (dict(symbols=[]), dict(symbols=["A"], days=3), dict(symbols=["A"], initial_balance=0),
                     dict(symbols=[f"S{i}USDT" for i in range(16)])):
             with self.assertRaises(ValueError, msg=bad):
                 backtest.BacktestConfig(**bad)
+
+
+class MultiTimeframeTests(unittest.TestCase):
+    """A 4h setup next to a 1h setup: each is read and managed on its own candles."""
+
+    def setUp(self):
+        start = 1_700_000_000 // (4 * HOUR) * (4 * HOUR)
+        self.hourly = candles_from_closes([100.0] * 480, wick=0.5, start=start)
+        self.four = candles_from_closes([100.0] * 120, wick=0.5, start=start, step=4 * HOUR)
+        self.calls, self.signals = [], {}
+
+        def fake_evaluate(setup, candles, ind, i, regime, btc_regime, params):
+            self.calls.append((setup, candles[i]["close_time_ms"] - candles[i]["time"] * 1000 + 1))
+            return self.signals.get((setup, candles[i]["time"])), ""
+
+        patcher = patch.object(strategy, "evaluate", fake_evaluate)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_bt(self, setups):
+        data = {"start_ms": self.hourly[40]["time"] * 1000, "end_ms": self.hourly[-1]["close_time_ms"] + 1,
+                "candles": {"1h": {SYM: self.hourly}, "4h": {SYM: self.four}}, "funding": {}, "funding_ok": True}
+        config = backtest.BacktestConfig([SYM], days=8, risk=NO_SLIPPAGE, strategy=StrategyParams(setups=setups))
+        return backtest.run_backtest(config, data)
+
+    def test_each_setup_is_evaluated_only_on_its_own_candles(self):
+        self.run_bt(["THRUST_BREAKOUT", "TREND_PULLBACK"])
+        widths = {setup: {width for s, width in self.calls if s == setup} for setup in ("THRUST_BREAKOUT", "TREND_PULLBACK")}
+        self.assertEqual(widths, {"THRUST_BREAKOUT": {4 * HOUR * 1000}, "TREND_PULLBACK": {HOUR * 1000}})
+        hourly = sum(s == "TREND_PULLBACK" for s, _ in self.calls)
+        self.assertAlmostEqual(hourly / sum(s == "THRUST_BREAKOUT" for s, _ in self.calls), 4, delta=0.2)
+
+    def test_4h_position_is_entered_at_the_next_open_and_managed_on_4h_candles(self):
+        self.signals[("THRUST_BREAKOUT", self.four[60]["time"])] = Signal(
+            "LONG", 100.0, 98.0, 1.0, "UP", "test", "THRUST_BREAKOUT", strategy.trail_exit(4.0))
+        self.four[62]["low"] = 97.0                                   # the second 4h candle after the signal hits the stop
+        result = self.run_bt(["THRUST_BREAKOUT", "TREND_PULLBACK"])
+        (trade,) = result["trades"]
+        self.assertEqual(trade["setup"], "THRUST_BREAKOUT")
+        self.assertEqual(trade["entry_time"], self.four[61]["time"] * 1000)       # open of the next 4h candle
+        self.assertEqual(trade["exit_time"], self.four[62]["close_time_ms"])
+        self.assertEqual((trade["reason"], trade["bars"]), ("STOP_LOSS", 1))      # one full 4h candle was held
+
+    def test_the_first_setup_in_priority_order_wins_a_tie(self):
+        t = self.four[60]["time"] + 3 * HOUR                              # the 1h candle closing with that 4h candle
+        self.signals[("THRUST_BREAKOUT", self.four[60]["time"])] = Signal(
+            "LONG", 100.0, 98.0, 1.0, "UP", "a", "THRUST_BREAKOUT", strategy.trail_exit(8.0))
+        self.signals[("TREND_PULLBACK", t)] = Signal("SHORT", 100.0, 102.0, 1.0, "DOWN", "b", exit=strategy.trail_exit(8.0))
+        trades = self.run_bt(["THRUST_BREAKOUT", "TREND_PULLBACK"])["trades"]
+        self.assertEqual([(x["setup"], x["direction"]) for x in trades], [("THRUST_BREAKOUT", "LONG")])
 
 
 class RegimeLookupTests(unittest.TestCase):

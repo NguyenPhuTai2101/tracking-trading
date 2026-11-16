@@ -164,3 +164,13 @@ textarea { min-height: 70px; resize: vertical; }
   .log div { grid-template-columns: 56px 1fr; }
   .log b { display: none; }
 }
+
+/* ---------- cases ---------- */
+.case { padding: 5px 0; border-bottom: 1px dashed var(--grid); line-height: 1.4; }
+.case:last-child { border-bottom: 0; }
+.case.fired b { color: var(--accent); }
+.setups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.setup { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.setup .hint { font-size: 12.5px; color: var(--ink-2); margin: 6px 0; }
+.setup .evidence { font-size: 12.5px; color: var(--muted); }
+.setup .evidence b { color: var(--ink-2); font-weight: 600; }

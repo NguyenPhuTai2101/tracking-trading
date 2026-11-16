@@ -10,4 +10,4 @@ bot_state_spot.json*
 bot_state_futures.json*
 demo_stop_probe.json
 trading.db*
-research_data.pkl
+research_*.pkl

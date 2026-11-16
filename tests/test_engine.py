@@ -2,15 +2,17 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
+import strategy
 from engine import BotConfig, TradingEngine
 from journal import Journal
 from risk import RiskConfig
-from strategy import Signal
-from tests.helpers import HOUR, FakeExchange, candles_from_closes
+from strategy import Signal, StrategyParams
+from tests.helpers import HOUR, FakeExchange, candles_from_closes, recent_candles
 
 SYM = "ETHUSDT"
-LONG = Signal("LONG", 100.0, 98.0, 1.0, "UP", "test")
+LONG = Signal("LONG", 100.0, 98.0, 1.0, "UP", "test", "TREND_PULLBACK", strategy.trend_exit(StrategyParams()))
 QTY = 3.504        # 0.75% of 1000 over a 2% stop + 0.14% costs = 350.47 USDT, floored to the lot size
 
 
@@ -200,6 +202,57 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.new_engine().config.risk.risk_pct, 0.5)
         with self.assertRaises(ValueError):
             self.engine.update_config(BotConfig(risk=RiskConfig(leverage=3)))
+
+    # ---------------- cases ----------------
+
+    def scan_with(self, firing):
+        """Run one scan of SYM with live-looking candles; `firing` maps setup -> Signal."""
+        for interval, step in (("1h", HOUR), ("4h", 4 * HOUR), ("1d", 24 * HOUR)):
+            for sym in (SYM, "BTCUSDT"):
+                self.exchange.klines[(sym, interval)] = recent_candles(120, step)
+
+        def fake(setup, candles, ind, i, regime, btc_regime, params):
+            return firing.get(setup), f"note {setup}"
+
+        with patch.object(strategy, "evaluate", fake):
+            self.engine._scan_symbol(SYM)
+        return {case["setup"]: case for case in self.engine.get_status()["scan_board"][0]["cases"]}
+
+    def test_only_enabled_setups_trade_the_rest_are_observed(self):
+        fade = Signal("SHORT", 100.0, 101.5, 1.0, "RANGE", "sweep", "FAILED_BREAKOUT", strategy.target_exit(97.0))
+        cases = self.scan_with({"FAILED_BREAKOUT": fade})
+        self.assertEqual(self.exchange.sent, [])                         # recognised, not traded
+        self.assertEqual(set(cases), set(strategy.SETUPS))               # every case was looked for
+        self.assertEqual((cases["FAILED_BREAKOUT"]["signal"], cases["FAILED_BREAKOUT"]["traded"]), ("SHORT", False))
+        self.assertIn("chỉ quan sát", cases["FAILED_BREAKOUT"]["note"])
+        self.assertTrue(cases["THRUST_BREAKOUT"]["traded"])
+        self.assertTrue(any(e["level"] == "CASE" for e in self.engine.journal.events()))
+
+    def test_enabled_4h_setup_opens_a_position_managed_on_4h_candles(self):
+        thrust = Signal("LONG", 100.0, 98.0, 1.0, "UP", "thrust", "THRUST_BREAKOUT", strategy.trail_exit(4.0))
+        cases = self.scan_with({"THRUST_BREAKOUT": thrust})
+        self.assertEqual(cases["THRUST_BREAKOUT"]["signal"], "LONG")
+        pos = self.engine.positions[SYM]
+        self.assertEqual((pos["setup"], pos["interval"], pos["quantity"]), ("THRUST_BREAKOUT", "4h", QTY))
+        self.assertTrue(pos["plan"]["partial_done"])                     # trail-only exit: no partial at 2R
+        self.exchange.price[SYM] = 104.5
+        self.engine._tick()
+        self.assertEqual(len(self.exchange.sent), 1)                     # still just the entry
+        self.scan_with({"THRUST_BREAKOUT": thrust})                      # the same candle is never traded twice
+        self.assertEqual(len(self.exchange.sent), 1)
+
+    def test_target_setup_takes_profit_at_the_target(self):
+        self.engine.stop()
+        self.engine.update_config(BotConfig(strategy=StrategyParams(setups=["RANGE_REVERSION"])))
+        self.assertTrue(self.engine.start()["success"])
+        fade = Signal("LONG", 100.0, 98.0, 1.0, "RANGE", "revert", "RANGE_REVERSION", strategy.target_exit(102.5))
+        self.scan_with({"RANGE_REVERSION": fade})
+        self.assertIn(SYM, self.engine.positions)
+        self.exchange.price[SYM] = 102.6
+        self.engine._tick()
+        (trade,) = self.trades()
+        self.assertEqual((trade["reason"], trade["setup"]), ("TAKE_PROFIT", "RANGE_REVERSION"))
+        self.assertGreater(trade["r_multiple"], 1.0)
 
     def test_stopped_bot_still_manages_open_positions(self):
         self.enter()

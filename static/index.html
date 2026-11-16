@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
   <title>Trading Bot · Quản lý vốn</title>
-  <link rel="stylesheet" href="/static/style.css?v=4.0.0">
+  <link rel="stylesheet" href="/static/style.css?v=4.1.0">
 </head>
 <body>
 <header>
@@ -14,7 +14,7 @@
       <div class="logo">₿</div>
       <div>
         <h1>Trading Bot</h1>
-        <small>Binance Futures Demo · pullback thuận xu hướng</small>
+        <small>Binance Futures Demo · nhận diện nhiều case thị trường</small>
       </div>
     </div>
     <span id="bot-pill" class="pill off">Đang tải…</span>
@@ -58,7 +58,7 @@
 
     <div class="grid-2">
       <div class="card">
-        <h2>Bảng quét tín hiệu</h2>
+        <h2>Bảng quét case</h2>
         <div class="table-wrap" id="scan-board"></div>
       </div>
       <div class="card">
@@ -86,9 +86,10 @@
       <div class="chart" id="perf-chart"></div>
     </div>
     <div class="grid-2">
-      <div class="card"><h2>Theo mã</h2><div class="table-wrap" id="perf-symbols"></div></div>
+      <div class="card"><h2>Theo case</h2><div class="table-wrap" id="perf-setups"></div></div>
       <div class="card"><h2>Theo lý do thoát</h2><div class="table-wrap" id="perf-reasons"></div></div>
     </div>
+    <div class="card"><h2>Theo mã</h2><div class="table-wrap" id="perf-symbols"></div></div>
     <div class="card"><h2>Lệnh đã đóng</h2><div class="table-wrap" id="perf-trades"></div></div>
   </section>
 
@@ -99,7 +100,13 @@
     </div>
     <div class="card"><h2>Quản lý vốn</h2><div class="form-grid" id="form-capital"></div></div>
     <div class="card"><h2>Ngắt mạch</h2><div class="form-grid" id="form-breakers"></div></div>
-    <div class="card"><h2>Chiến lược</h2><div class="form-grid" id="form-strategy"></div></div>
+    <div class="card">
+      <h2>Case bot nhận diện</h2>
+      <p class="muted" style="margin:0 0 12px;font-size:13px">Bot luôn quét và báo cáo mọi case dưới đây. Chỉ case được đánh dấu mới được vào lệnh; các case còn lại hiện ở bảng quét và nhật ký để bạn theo dõi trước.</p>
+      <div class="setups" id="form-setups"></div>
+    </div>
+    <div class="card"><h2>Tham số chung và case "Phá vỡ có lực"</h2><div class="form-grid" id="form-strategy"></div></div>
+    <div class="card"><h2>Tham số case "Nhịp hồi trong xu hướng"</h2><div class="form-grid" id="form-pullback"></div></div>
     <div class="card">
       <h2>Danh mục quét</h2>
       <div class="field">
@@ -127,8 +134,8 @@
         </div>
         <div class="field">
           <label for="bt-days">Số ngày</label>
-          <div class="hint">7–365. Dài hơn thì nhiều lệnh hơn và kết luận chắc hơn.</div>
-          <input type="number" id="bt-days" value="180" min="7" max="365" step="1">
+          <div class="hint">7–1095. Case khung 4h cần ít nhất 1–2 năm mới đủ lệnh để kết luận.</div>
+          <input type="number" id="bt-days" value="730" min="7" max="1095" step="1">
         </div>
         <div class="field">
           <label for="bt-balance">Vốn ban đầu (USDT)</label>
@@ -157,15 +164,16 @@
         <div class="card"><h2>Tín hiệu bị mô hình vốn chặn</h2><div class="table-wrap" id="bt-skipped"></div></div>
       </div>
       <div class="grid-2">
-        <div class="card"><h2>Theo mã</h2><div class="table-wrap" id="bt-symbols-table"></div></div>
+        <div class="card"><h2>Theo case</h2><div class="table-wrap" id="bt-setups"></div></div>
         <div class="card"><h2>Theo lý do thoát</h2><div class="table-wrap" id="bt-reasons"></div></div>
       </div>
+      <div class="card"><h2>Theo mã</h2><div class="table-wrap" id="bt-symbols-table"></div></div>
       <div class="card" id="bt-robust-card" hidden><h2>Độ nhạy tham số</h2><div class="table-wrap" id="bt-robust-table"></div></div>
       <div class="card"><h2>Lệnh mô phỏng (200 lệnh gần nhất)</h2><div class="table-wrap" id="bt-trades"></div></div>
     </div>
   </section>
 </main>
 
-<script src="/static/app.js?v=4.0.0"></script>
+<script src="/static/app.js?v=4.1.0"></script>
 </body>
 </html>

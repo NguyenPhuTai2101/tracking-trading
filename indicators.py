@@ -1,4 +1,6 @@
 """Indicator series. Every function returns a list aligned with its input; None = not enough history."""
+import math
+from collections import deque
 from typing import Dict, List, Optional, Sequence
 
 Series = List[Optional[float]]
@@ -84,4 +86,64 @@ def adx(candles: Sequence[Dict], period: int = 14) -> Series:
         else:
             value = (value * (period - 1) + dx) / period
             out[k + 1] = value
+    return out
+
+
+def bollinger(closes: Sequence[float], period: int = 20, width: float = 2.0):
+    """(middle, upper, lower) bands: a moving average and `width` standard deviations around it."""
+    n = len(closes)
+    middle: Series = [None] * n
+    upper: Series = [None] * n
+    lower: Series = [None] * n
+    total = squares = 0.0
+    for i, close in enumerate(closes):
+        total += close
+        squares += close * close
+        if i >= period:
+            total -= closes[i - period]
+            squares -= closes[i - period] ** 2
+        if i >= period - 1:
+            mean = total / period
+            deviation = math.sqrt(max(squares / period - mean * mean, 0.0))
+            middle[i], upper[i], lower[i] = mean, mean + width * deviation, mean - width * deviation
+    return middle, upper, lower
+
+
+def rolling_extreme(values: Sequence[float], n: int, pick) -> Series:
+    """out[i] = max (pick=max) or min (pick=min) of the n values BEFORE i; None until n values exist."""
+    out: Series = [None] * len(values)
+    window = deque()                       # indices, best candidate first
+    for i, value in enumerate(values):
+        if i >= n:
+            while window[0] < i - n:
+                window.popleft()
+            out[i] = values[window[0]]
+        while window and (value >= values[window[-1]] if pick is max else value <= values[window[-1]]):
+            window.pop()
+        window.append(i)
+    return out
+
+
+def percent_rank(values: Sequence[Optional[float]], n: int) -> Series:
+    """Share of the last n values that are below the current one (0 = lowest in the window)."""
+    out: Series = [None] * len(values)
+    for i in range(len(values)):
+        window = values[i - n + 1:i + 1] if i >= n - 1 else None
+        if window and window[0] is not None:
+            out[i] = sum(v < values[i] for v in window) / n
+    return out
+
+
+def sma(values: Sequence[Optional[float]], n: int) -> Series:
+    out: Series = [None] * len(values)
+    total, count = 0.0, 0
+    for i, value in enumerate(values):
+        if value is not None:
+            total += value
+            count += 1
+        if i >= n and values[i - n] is not None:
+            total -= values[i - n]
+            count -= 1
+        if count == n:
+            out[i] = total / n
     return out

@@ -15,6 +15,12 @@ def candles_from_closes(closes, wick=0.2, start=1_700_000_000 // HOUR * HOUR, st
     return out
 
 
+def recent_candles(count, step=HOUR, price=100.0, wick=0.5):
+    """Closed candles whose last one closed at the most recent `step` boundary, as a live feed would give."""
+    last_open = int(time.time()) // step * step - step
+    return candles_from_closes([price] * count, wick=wick, start=last_open - (count - 1) * step, step=step)
+
+
 def pullback_closes(sign=1):
     """A steady trend, a five-candle pullback to the EMA20, then a confirmation candle."""
     closes = [100 + 0.3 * i for i in range(80)]

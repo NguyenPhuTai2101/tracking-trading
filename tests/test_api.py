@@ -55,7 +55,13 @@ class ApiTests(unittest.TestCase):
         self.assertIn("LINKUSDT", response.json()["detail"])
 
     def test_config_is_validated_and_saved(self):
-        config = self.client.get("/api/config").json()["config"]
+        payload = self.client.get("/api/config").json()
+        self.assertEqual([s["key"] for s in payload["setups"]][0], "THRUST_BREAKOUT")
+        self.assertTrue(all(s["evidence"] and s["case"] for s in payload["setups"]))
+        config = payload["config"]
+        config["strategy"]["setups"] = ["NOPE"]
+        self.assertEqual(self.client.post("/api/config", json=config).status_code, 422)
+        config["strategy"]["setups"] = ["TREND_PULLBACK", "THRUST_BREAKOUT"]
         config["risk"]["risk_pct"] = 5
         self.assertEqual(self.client.post("/api/config", json=config).status_code, 422)
         config["risk"]["risk_pct"] = 0.5
@@ -64,6 +70,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.engine.config.risk.risk_pct, 0.5)
         self.assertEqual(self.engine.config.watchlist, ["BTCUSDT", "ETHUSDT"])
+        self.assertEqual(self.engine.config.strategy.setups, ["THRUST_BREAKOUT", "TREND_PULLBACK"])
         config["watchlist"] = ["not a symbol"]
         self.assertEqual(self.client.post("/api/config", json=config).status_code, 422)
         config["watchlist"], config["unknown"] = ["BTCUSDT"], 1
@@ -73,7 +80,7 @@ class ApiTests(unittest.TestCase):
         self.engine.journal.commit({}, [{
             "position_id": "p1", "symbol": "ETHUSDT", "direction": "LONG", "entry_time": 1, "exit_time": 2_000_000_000_000,
             "entry_price": 100, "exit_price": 104, "quantity": 1, "gross_pnl": 4, "fees": 0.1, "net_pnl": 3.9,
-            "risk_usdt": 2, "r_multiple": 1.95, "reason": "TRAILING_STOP", "bars": 9}])
+            "risk_usdt": 2, "r_multiple": 1.95, "reason": "TRAILING_STOP", "bars": 9, "setup": "THRUST_BREAKOUT"}])
         self.engine.journal.add_equity(1000, 1_999_999_000_000)
         self.engine.journal.add_equity(1003.9, 2_000_000_000_000)
         data = self.client.get("/api/dashboard?days=0").json()
@@ -81,17 +88,19 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(data["summary"]["low_sample"])
         self.assertEqual(len(data["equity_curve"]), 2)
         self.assertEqual(data["trades"][0]["reason"], "TRAILING_STOP")
+        self.assertEqual(data["by_setup"][0]["setup"], "THRUST_BREAKOUT")
 
     def test_backtest_endpoint_uses_saved_config_and_rejects_bad_input(self):
-        candles = candles_from_closes([100.0] * 400)
+        candles = candles_from_closes([100.0] * 400, step=4 * 3600)
         data = {"start_ms": candles[150]["time"] * 1000, "end_ms": candles[-1]["close_time_ms"] + 1,
-                "signal": {"ETHUSDT": candles}, "regime": {}, "funding": {}, "funding_ok": True}
+                "candles": {"4h": {"ETHUSDT": candles}}, "funding": {}, "funding_ok": True}
         with patch.object(main.backtest_module, "load_data", return_value=data):
             response = self.client.post("/api/backtest", json={"symbols": ["ETHUSDT"], "days": 10})
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["total_trades"], 0)                       # a flat market has no trend to trade
         self.assertEqual(body["config"]["risk"]["risk_pct"], 0.75)
+        self.assertEqual(body["config"]["strategy"]["setups"], ["THRUST_BREAKOUT"])
         self.assertEqual(self.client.post("/api/backtest", json={"symbols": [], "days": 10}).status_code, 422)
         self.assertEqual(self.client.post("/api/backtest", json={"symbols": ["ETHUSDT"], "days": 10,
                                                                  "risk": {"risk_pct": 9}}).status_code, 422)

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 TRADE_COLUMNS = ("position_id", "symbol", "direction", "entry_time", "exit_time", "entry_price",
                  "exit_price", "quantity", "gross_pnl", "fees", "net_pnl", "risk_usdt", "r_multiple",
-                 "reason", "bars")
+                 "reason", "bars", "setup")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_time INTEGER NOT NULL, exit_time INTEGER NOT NULL,
     entry_price REAL NOT NULL, exit_price REAL NOT NULL, quantity REAL NOT NULL,
     gross_pnl REAL NOT NULL, fees REAL NOT NULL, net_pnl REAL NOT NULL,
-    risk_usdt REAL NOT NULL, r_multiple REAL NOT NULL, reason TEXT NOT NULL, bars INTEGER NOT NULL);
+    risk_usdt REAL NOT NULL, r_multiple REAL NOT NULL, reason TEXT NOT NULL, bars INTEGER NOT NULL,
+    setup TEXT NOT NULL DEFAULT 'TREND_PULLBACK');
 CREATE INDEX IF NOT EXISTS trades_exit ON trades (exit_time);
 CREATE TABLE IF NOT EXISTS equity (ts INTEGER PRIMARY KEY, equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
@@ -37,6 +38,9 @@ class Journal:
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        if "setup" not in {row["name"] for row in self.db.execute("PRAGMA table_info(trades)")}:
+            # Databases created before setups existed: every trade then was a trend pullback.
+            self.db.execute("ALTER TABLE trades ADD COLUMN setup TEXT NOT NULL DEFAULT 'TREND_PULLBACK'")
 
     def close(self):
         with self.lock:

@@ -1,17 +1,21 @@
-# Trading Bot: quản lý vốn + giao dịch tự động (Binance Futures Demo)
+# Trading Bot: quản lý vốn + nhận diện case thị trường (Binance Futures Demo)
 
-Bot USDT-M Futures chạy trên **Binance Demo**. Nguyên tắc thiết kế: **mô hình vốn quyết định, chiến lược
-chỉ đề xuất**. Chiến lược đưa ra hướng và điểm cắt lỗ; mô hình vốn quyết định có vào lệnh không và vào bao nhiêu.
+Bot USDT-M Futures chạy trên **Binance Demo**. Hai nguyên tắc thiết kế:
 
-> Đây là công cụ thử nghiệm trên tài khoản Demo, không phải lời khuyên đầu tư. Nghiên cứu trên 3 năm dữ liệu
-> cho thấy cả chiến lược mặc định lẫn ứng viên thay thế đều **không có lợi thế sau phí khi kiểm tra ngoài mẫu**
-> (xem [Nghiên cứu tín hiệu](#nghiên-cứu-tín-hiệu)). Đừng dùng tiền thật.
+- **Mô hình vốn quyết định, chiến lược chỉ đề xuất.** Chiến lược đưa ra hướng và điểm cắt lỗ; mô hình vốn
+  quyết định có vào lệnh không và vào bao nhiêu.
+- **Nhận diện nhiều case, chỉ giao dịch case có bằng chứng.** Bot quét và báo cáo mọi case nó biết; case nào
+  chưa qua kiểm tra ngoài mẫu thì chỉ được quan sát.
+
+> Đây là công cụ thử nghiệm trên tài khoản Demo, không phải lời khuyên đầu tư. Trong các case đã nghiên cứu chỉ
+> có một case (phá vỡ có lực khung 4h) cho kỳ vọng dương, và mức dương đó **nhỏ, dồn vào những năm thị trường
+> có xu hướng mạnh** (xem [Nghiên cứu tín hiệu](#nghiên-cứu-tín-hiệu)). Đừng dùng tiền thật.
 
 ## Cấu trúc
 
 ```
 dữ liệu nến ─► strategy.py ─► risk.py ─► engine.py ─► binance_client.py
-               (tín hiệu)    (duyệt +     (khớp lệnh,   (lớp sàn)
+               (case/setup)  (duyệt +     (khớp lệnh,   (lớp sàn)
                               khối lượng)  SL trên sàn)
                                   │
 backtest.py dùng chung strategy.py và risk.py      journal.py (SQLite) ─► metrics.py ─► giao diện
@@ -19,14 +23,33 @@ backtest.py dùng chung strategy.py và risk.py      journal.py (SQLite) ─► 
 
 | File | Vai trò |
 |---|---|
-| `strategy.py` | Xu hướng 4h, tín hiệu pullback 1h, kế hoạch thoát lệnh. Hàm thuần, không gọi mạng |
+| `strategy.py` | Các case (setup): quy tắc nhận diện, khung thời gian, cách thoát lệnh. Hàm thuần, không gọi mạng |
 | `risk.py` | Tính khối lượng theo rủi ro, trần danh mục, ngắt mạch, thang drawdown |
-| `engine.py` | Vòng lặp bot, ghi lệnh trước khi gửi, đối soát, SL trên sàn |
+| `engine.py` | Quét từng case trên khung của nó, ghi lệnh trước khi gửi, đối soát, SL trên sàn |
 | `backtest.py` | Mô phỏng danh mục với đúng `strategy.py` + `risk.py`, có phí, trượt giá, funding |
-| `research.py` | Nghiên cứu tín hiệu trên 3 năm dữ liệu, tách train/test |
+| `research.py` | Nghiên cứu tín hiệu với ba tập dữ liệu tách rời (train / kiểm định / holdout) |
 | `journal.py` | SQLite `trading.db`: trạng thái bot, lệnh đã đóng, đường vốn, nhật ký |
 | `binance_client.py` | REST Binance Demo: lệnh, lệnh điều kiện (algo), vị thế, nến |
 | `main.py`, `static/` | API FastAPI và giao diện một trang |
+
+## Các case bot nhận diện
+
+Mỗi case có khung tín hiệu, khung xu hướng và cách thoát lệnh riêng. Bot **luôn quét cả bốn**; chỉ case được
+bật ở tab Thiết lập mới được vào lệnh. Case còn lại hiện ở bảng quét và nhật ký (`CASE`) để bạn theo dõi.
+
+| Case | Khung | Nhận diện | Thoát lệnh | Bằng chứng | Mặc định |
+|---|---|---|---|---|---|
+| **Phá vỡ có lực** `THRUST_BREAKOUT` | 4h, xu hướng ngày | Nến đóng vượt đỉnh/đáy 20 nến **và** vượt dải Bollinger, không ngược xu hướng ngày | SL 2 ATR, trailing 4 ATR. Không hòa vốn, không chốt một phần | Dương ở cả 4 mẫu dữ liệu, +0,07 đến +0,25R mỗi lệnh | **Vào lệnh** |
+| **Nhịp hồi trong xu hướng** `TREND_PULLBACK` | 1h, xu hướng 4h | Xu hướng rõ, giá hồi về EMA20 rồi có nến xác nhận | Hòa vốn ở 1R, chốt 50% ở 2R, trailing 3 ATR, time stop | Không có lợi thế (−0,055R train, ≈ 0R ngoài mẫu) | Quan sát |
+| **Đảo chiều trong vùng đi ngang** `RANGE_REVERSION` | 1h, xu hướng 4h | Đi ngang, giá đóng ngoài dải Bollinger rồi đóng trở lại | Mục tiêu đường giữa dải, tối đa 24 nến | Âm trên train (−0,22R), ≈ 0R trên kiểm định | Quan sát |
+| **Phá vỡ giả** `FAILED_BREAKOUT` | 1h, xu hướng 4h | Giá quét qua đỉnh/đáy 48 nến rồi đóng ngược lại | Mục tiêu 2R, tối đa 24 nến | Âm trên train (−0,13R), ≈ 0R trên kiểm định | Quan sát |
+
+Bảng quét còn gắn nhãn trạng thái thị trường cho từng mã: **nén biến động** (độ rộng Bollinger thuộc 20% thấp
+nhất của 120 nến), **sốc biến động** (ATR gấp đôi trung bình 100 nến), **quá mua / quá bán** (RSI ≥ 70 / ≤ 30).
+Các nhãn này chỉ mô tả, không tạo lệnh: nghiên cứu cho thấy chúng không cải thiện kết quả khi dùng làm bộ lọc.
+
+Xu hướng (TĂNG / GIẢM / ĐI NGANG) tính từ giá so với EMA200, độ dốc EMA200 và ADX ≥ 20 trên khung xu hướng
+của từng case. Mỗi mã chỉ có một vị thế; nếu hai case cùng báo ở một nến thì case đứng trước trong bảng thắng.
 
 ## Mô hình quản lý vốn
 
@@ -44,17 +67,6 @@ khoảng cho phép ở tab Thiết lập.
 | Ngắt mạch ngày / tuần | −2% / −5% | Nghỉ mở lệnh tới 00:00 UTC / thứ Hai. Vị thế đang mở vẫn giữ SL |
 | Chuỗi thua | 4 lệnh | Nghỉ tới hôm sau |
 | Thang drawdown | −10% / −20% từ đỉnh | −10%: rủi ro mỗi lệnh giảm một nửa. −20%: bot dừng, chờ bạn bấm xác nhận |
-
-## Chiến lược: pullback thuận xu hướng
-
-1. **Xu hướng (4h):** giá so với EMA200, độ dốc EMA200 và ADX ≥ 20 cho ra TĂNG / GIẢM / ĐI NGANG.
-   Đi ngang thì đứng ngoài. Altcoin không đánh ngược xu hướng của BTC.
-2. **Thiết lập (1h):** EMA20/EMA50 cùng chiều xu hướng, giá hồi về EMA20 và RSI nguội lại.
-3. **Kích hoạt:** nến 1h đóng theo chiều xu hướng, vượt đỉnh/đáy nến trước, chưa chạy quá 1 ATR khỏi EMA20.
-   Vào lệnh ở giá mở nến kế tiếp.
-4. **Cắt lỗ:** ngoài đáy/đỉnh của nhịp hồi, tối thiểu 1,5 ATR. Xa hơn 3 ATR thì bỏ lệnh.
-5. **Thoát:** đạt 1R dời SL về hòa vốn (cộng phí); đạt 2R chốt 50%; phần còn lại trailing 3 ATR sau giá
-   tốt nhất; sau 24 nến chưa đạt 0,5R thì đóng.
 
 ## Chạy ứng dụng
 
@@ -82,10 +94,11 @@ BINANCE_SECRET_KEY=...
 ### Bốn tab
 
 - **Tổng quan:** vốn, lãi/lỗ ngày và tuần, drawdown, mức sử dụng từng giới hạn rủi ro, vị thế đang mở, bảng
-  quét (vì sao mỗi mã có hay chưa có tín hiệu), nhật ký.
-- **Hiệu suất:** lệnh đã đóng tính theo R và USDT sau phí ước tính, đường vốn lấy từ số dư thật.
-- **Thiết lập:** tham số vốn, ngắt mạch, chiến lược, danh mục. Phải dừng bot trước khi lưu.
-- **Backtest:** chạy thử các giá trị đang hiện ở tab Thiết lập (kể cả chưa lưu).
+  quét case (mỗi mã: từng case đang ở bước nào, ● được vào lệnh, ○ chỉ quan sát), nhật ký.
+- **Hiệu suất:** lệnh đã đóng tính theo R và USDT sau phí ước tính, tách theo case; đường vốn lấy từ số dư thật.
+- **Thiết lập:** bật/tắt từng case (kèm bằng chứng nghiên cứu), tham số vốn, ngắt mạch, danh mục. Phải dừng
+  bot trước khi lưu.
+- **Backtest:** chạy thử các giá trị đang hiện ở tab Thiết lập (kể cả chưa lưu), có bảng theo case.
 
 ### Hành vi an toàn của engine
 
@@ -93,8 +106,8 @@ BINANCE_SECRET_KEY=...
 - Mỗi vị thế có một lệnh STOP_MARKET reduce-only theo Mark Price **trên sàn**, nên SL vẫn còn khi ứng dụng tắt.
   Khi kế hoạch dời SL (hòa vốn, trailing) hoặc sau khi chốt một phần, bot hủy lệnh SL cũ và đặt lại ở mức mới;
   trong lúc đó vòng giám sát 2 giây tự thực thi SL.
-- Chốt một phần, hòa vốn, trailing và time stop **cần ứng dụng đang chạy**. Khi ứng dụng tắt chỉ còn SL trên
-  sàn ở mức đã đặt gần nhất.
+- Trailing, hòa vốn, chốt một phần, chạm mục tiêu và time stop **cần ứng dụng đang chạy**. Khi ứng dụng tắt chỉ
+  còn SL trên sàn ở mức đã đặt gần nhất. Vị thế được quản lý theo nến của case đã mở nó (4h hoặc 1h).
 - Đặt SL trên sàn thất bại: đóng vị thế đó. Thất bại 2 lần trong 1 giờ: bot dừng.
 - Vị thế trên sàn mà bot không biết sẽ **chặn mở lệnh mới**. Bảng điều khiển có nút đóng riêng các vị thế đó;
   "Đóng tất cả" chỉ đóng vị thế của bot.
@@ -106,30 +119,47 @@ BINANCE_SECRET_KEY=...
 Trên giao diện (tab Backtest) hoặc dòng lệnh:
 
 ```bash
-python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --days 180 --robust
+python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --days 730 --robust
 ```
 
-Mô phỏng: vào ở giá mở nến kế tiếp cộng trượt giá (bỏ nếu lệch quá 1%), phí taker mỗi lần khớp, funding lịch
-sử, nến chạm cả SL và mục tiêu tính là SL, gap qua SL khớp ở giá mở. Chưa mô phỏng thanh lý, làm tròn khối
-lượng và độ sâu sổ lệnh. Dữ liệu nến lấy từ API công khai của Binance, không gửi khóa API.
+```bash
+python backtest.py --setups THRUST_BREAKOUT TREND_PULLBACK --days 365
+```
 
-Báo cáo gồm kết quả ở **70% đầu và 30% cuối** giai đoạn, mức **mua & giữ**, số tín hiệu bị mô hình vốn chặn, và
-(tùy chọn) **độ nhạy tham số**. Chỉ chỉnh tham số dựa trên 70% đầu; cấu hình chỉ lãi ở một phần, hoặc chỉ lãi
-ở đúng một giá trị tham số, nhiều khả năng là khớp nhiễu.
+Mỗi case đọc nến của khung riêng; vị thế được quản lý theo nến của case đã mở nó. Vào ở giá mở nến kế tiếp
+cộng trượt giá (bỏ nếu lệch quá 1%), phí taker mỗi lần khớp, funding lịch sử, nến chạm cả SL và mục tiêu tính
+là SL, gap qua SL khớp ở giá mở. Chưa mô phỏng thanh lý, làm tròn khối lượng và độ sâu sổ lệnh. Dữ liệu nến
+lấy từ API công khai của Binance, không gửi khóa API. Tối đa 1.095 ngày, 15 mã.
+
+Báo cáo gồm kết quả ở **70% đầu và 30% cuối** giai đoạn, mức **mua & giữ**, kết quả theo case, số tín hiệu bị
+mô hình vốn chặn, và (tùy chọn) **độ nhạy tham số**. Cấu hình chỉ lãi ở một phần, hoặc chỉ lãi ở đúng một giá
+trị tham số, nhiều khả năng là khớp nhiễu.
 
 ### Kết quả backtest của cấu hình mặc định
 
-10 mã mặc định, 365 ngày tới 16/11/2026, vốn 1.000 USDT: 386 lệnh, thắng 29,3%, kỳ vọng −0,01R, lợi nhuận
-+4,2%, drawdown tối đa 20,2% (chạm mức dừng). Mua & giữ cùng giai đoạn: −50,7%. Mô hình vốn làm đúng việc
-(mỗi lần cắt lỗ ≈ −1R, drawdown dừng ở ngưỡng đã đặt), nhưng điểm vào lệnh không tạo ra lợi thế.
+Case "Phá vỡ có lực", 10 mã mặc định, 730 ngày tới 16/11/2026, vốn 1.000 USDT, mô hình vốn mặc định:
+380 lệnh, thắng 31,1%, kỳ vọng +0,13R, **lợi nhuận +8,9%**, **drawdown tối đa 17,6%**. Mua & giữ cùng giai
+đoạn: −50,2%. Phần lớn giai đoạn này nằm trong dữ liệu đã dùng để nghiên cứu, nên đây là mô tả chứ không phải
+bằng chứng ngoài mẫu. Lợi nhuận mỏng so với drawdown: hãy coi đây là một case đáng theo dõi tiếp trên Demo.
 
 ## Nghiên cứu tín hiệu
 
-`research.py` chạy đúng bộ backtest của project trên 3 năm dữ liệu (17/11/2023 → 16/11/2026, 10 mã), gỡ các
-trần và ngắt mạch của mô hình vốn để đo riêng tín hiệu: R mỗi lệnh sau phí, trượt giá và funding.
+`research.py` chạy đúng bộ backtest của project, gỡ các trần và ngắt mạch của mô hình vốn để đo riêng tín
+hiệu: R mỗi lệnh sau phí, trượt giá và funding. Ba tập dữ liệu tách rời:
+
+| Tập | Giai đoạn, coin | Dùng để |
+|---|---|---|
+| **Train** | 11/2023 → 12/2025, 10 coin của danh mục | Dò tìm thoải mái |
+| **Kiểm định** | 12/2025 → 11/2026, 10 coin của danh mục | Kiểm tra điều train gợi ý |
+| **Holdout H1** | 01/2021 → 11/2023, 20 coin | Chu kỳ thị trường trước đó, chưa từng dùng |
+| **Holdout H2** | 11/2023 → 11/2026, 10 coin khác | Coin chưa từng xem (LTC, DOT, TRX, BCH, NEAR, UNI, ATOM, ETC, XLM, AAVE) |
 
 ```bash
 python research.py fetch
+```
+
+```bash
+python research.py fetch-holdout
 ```
 
 ```bash
@@ -137,52 +167,49 @@ python research.py train
 ```
 
 ```bash
-python research.py test
+python research.py validate
 ```
 
-Kỷ luật: dò tìm thoải mái trên **70% đầu** (train, tới 22/12/2025); chọn trước **một** ứng viên rồi mới chạy
-**30% cuối** (test). Mỗi lần nhìn vào test là một lần "tiêu" nó.
+```bash
+python research.py holdout
+```
 
-### Trên train (11/2023 – 12/2025)
+### Kết quả (kỳ vọng mỗi lệnh, t-statistic, số lệnh)
 
-| Quy tắc | Lệnh | Kỳ vọng | t | Nửa đầu / nửa sau |
-|---|---|---|---|---|
-| Pullback 1h mặc định | 1.646 | −0,055R | −1,9 | −0,011R / −0,100R |
-| Pullback 1h, bỏ hòa vốn + chốt một phần | 1.597 | −0,039R | −1,1 | +0,009R / −0,088R |
-| Đối chứng: theo xu hướng 4h, **không setup** | 4.166 | +0,010R | +0,4 | −0,003R / +0,023R |
-| Breakout 24 / 96 nến 1h, lọc xu hướng 4h | 1.970 / 1.192 | −0,045R / −0,018R | −1,2 / −0,4 | |
-| Breakout 40 nến 4h, SL 2 ATR, trailing 4 ATR, không lọc | 861 | +0,159R | +2,4 | +0,231R / +0,085R |
-
-- **Setup pullback không thêm gì**: nó kém hơn cả việc vào lệnh theo xu hướng mà không cần setup. Đổi cách
-  thoát lệnh cũng không cứu được.
-- **Breakout 4h trông có triển vọng**: cả 24 ô trong lưới (N 20/40/80 × SL 2/3 ATR × trailing 3–6 ATR) đều
-  dương, t từ 0,8 đến 2,6. Nhưng 10 lệnh lớn nhất (một lệnh XRP +97R cuối 2024) chiếm 226 trên 243R ở ô
-  trailing 5 ATR, và lệnh SHORT âm (−0,10R).
-
-Ứng viên chọn trước cho test: **breakout 40 nến 4h, SL 2 ATR, trailing 4 ATR, cả hai chiều, không lọc** (ô
-giữa của vùng dương, không phải ô tốt nhất).
-
-### Trên test (12/2025 – 11/2026), chạy một lần
-
-| Quy tắc | Lệnh | Kỳ vọng | t |
+| Quy tắc | Train | Kiểm định | Holdout (H1 + H2) |
 |---|---|---|---|
-| Ứng viên breakout 4h | 369 | −0,003R | −0,03 |
-| Pullback 1h mặc định | 641 | +0,001R | +0,02 |
+| **Phá vỡ có lực 4h** (case của bot) | +0,252R, t = 3,3 (795) | +0,079R, t = 0,6 (333) | **+0,103R, t = 2,7 (3.149)** |
+| Như trên, chỉ sau nén biến động | +0,275R, t = 2,8 (487) | +0,144R, t = 0,9 (227) | +0,057R, t = 1,3 (2.079) |
+| Donchian 40 nến 4h, không lọc | +0,159R, t = 2,4 (861) | −0,003R, t = 0,0 (369) | không chạy |
+| Nhịp hồi trong xu hướng 1h | −0,055R, t = −1,9 (1.646) | +0,001R, t = 0,0 (641) | không chạy |
+| Đối chứng: theo xu hướng 1h, không setup | +0,010R, t = 0,4 (4.166) | +0,093R, t = 2,1 (1.647) | không chạy |
+| Đảo chiều trong vùng đi ngang 1h | −0,219R, t = −4,9 (638) | +0,004R, t = 0,1 (236) | không chạy |
+| Phá vỡ giả 1h | −0,128R, t = −4,0 (1.433) | +0,004R, t = 0,1 (352) | không chạy |
 
-Qua mô hình vốn thật: ứng viên −0,7% (drawdown 18,6%), pullback mặc định +5,7% (drawdown 20,2%, bị dừng).
+Phá vỡ có lực trên holdout, tách ra: H1 +0,120R (t = 2,4; 2.029 lệnh), H2 +0,072R (t = 1,3; 1.120 lệnh).
+Theo năm: 2021 +0,26R, 2022 +0,08R, 2023 −0,01R, 2024 +0,32R, 2025 −0,08R, 2026 +0,02R.
+LONG +0,19R, SHORT +0,03R.
 
-Cùng lần chạy đó cũng in ra, chỉ để tham khảo chứ không dùng để chọn: 16/24 ô của lưới breakout dương trên
-test nhưng không ô nào có |t| ≥ 2; mẫu đối chứng "theo xu hướng, không setup" khung 1h đạt +0,093R (t = 2,1)
-trên test trong khi chỉ +0,010R trên train, tức là không nhất quán giữa hai giai đoạn.
+### Cách đọc, nói thẳng
 
-### Kết luận
-
-- Lợi thế của breakout 4h trên train **không lặp lại ngoài mẫu**. Nó đến từ vài con sóng lớn của năm 2024,
-  không phải từ quy tắc. Vì vậy chiến lược mặc định **không được đổi** sang breakout.
-- Chưa có quy tắc giá đơn giản nào (pullback, breakout, 1h hay 4h) cho thấy lợi thế sau phí trên 10 coin này.
-- Phí ăn khoảng 0,05R mỗi lệnh ở khung 1h và 0,02–0,03R ở khung 4h. Khung chậm rẻ hơn nhưng chưa đủ.
-- Giai đoạn test đã bị nhìn một lần. Ý tưởng mới cần dữ liệu mới (thêm coin, thêm lịch sử, hoặc chờ thời gian
-  trôi) thì kiểm tra ngoài mẫu mới còn ý nghĩa.
+- **Phá vỡ có lực 4h là case duy nhất dương ở cả bốn mẫu dữ liệu**, và trên train nó dương ở mọi biến thể tham
+  số đã thử (số nến 10/20/40, SL 1,5–3 ATR, trailing 3–5 ATR: +0,17 đến +0,37R). Vì vậy nó là case mặc định.
+- **Mức dương đó nhỏ và không đều.** Khoảng +0,1R mỗi lệnh, gần như toàn bộ đến từ hai năm có xu hướng mạnh
+  (2021, 2024) và từ lệnh LONG; các năm còn lại quanh 0. Qua mô hình vốn thật, năm kiểm định chỉ cho +3,0%
+  với drawdown 17,9%.
+- **Con số t = 2,7 trên holdout cần được hiểu đúng.** Quy tắc tôi cam kết trước khi mở holdout là biến thể
+  "chỉ sau nén biến động", và biến thể đó **không đạt** (+0,057R, t = 1,3). Phá vỡ có lực (cùng quy tắc nhưng bỏ
+  điều kiện nén) là giả thuyết phụ chạy cùng lần đó. Kết quả của nó vẫn vững sau khi hiệu chỉnh cho hai phép
+  thử, nhưng yếu hơn một giả thuyết chính được xác nhận.
+- **Điều kiện "nén biến động" không thêm gì**: trên holdout nó làm kết quả kém đi. Nên "nén" chỉ là nhãn mô tả.
+- **Đánh ngược không có lợi thế**: đảo chiều ở biên Bollinger và phá vỡ giả lỗ rõ rệt trên train, về 0 trên
+  kiểm định. Bot nhận diện hai case này nhưng mặc định không giao dịch.
+- **Donchian 40 nến** (ứng viên của vòng nghiên cứu trước) dương trên train nhưng về 0 trên kiểm định. Khác biệt
+  với phá vỡ có lực là yêu cầu vượt cả dải Bollinger và không đi ngược xu hướng ngày.
+- **Phí** ăn khoảng 0,05R mỗi lệnh ở khung 1h và 0,02–0,03R ở khung 4h. Đây là một lý do các case 1h khó dương.
+- **Holdout đã bị nhìn một lần.** Ý tưởng mới cần dữ liệu mới (thêm coin, hoặc chờ thời gian trôi) thì kiểm tra
+  ngoài mẫu mới còn ý nghĩa. Cách thu thêm bằng chứng không tốn dữ liệu: chạy bot trên Demo và theo dõi bảng
+  "Theo case" ở tab Hiệu suất.
 
 ## Kiểm thử
 
@@ -206,7 +233,9 @@ STOP_MARKET reduce-only ở xa giá để kiểm tra vòng đời lệnh SL; kh�
   dư thật nên đã gồm cả hai.
 - Luồng chốt một phần gửi lệnh reduce-only khi lệnh SL cũ còn trên sàn, rồi mới thay SL. Luồng này đã được
   kiểm thử với sàn giả lập, **chưa được xác nhận trên Binance Demo thật**; nếu sàn từ chối, bot bỏ qua bước
-  chốt một phần và tiếp tục trailing.
+  chốt một phần và tiếp tục trailing. Case mặc định (phá vỡ có lực) không dùng chốt một phần.
+- Mục tiêu chốt lời của các case đánh ngược do vòng giám sát thực thi (lệnh thị trường khi giá chạm), không
+  có lệnh chốt lời đặt sẵn trên sàn.
 - Ngày/tuần của ngắt mạch tính theo UTC. Nạp/rút tiền làm lệch các mốc vốn; drawdown tính lại từ hôm bạn bấm
   xác nhận.
 - Dữ liệu của bản cũ (`bot_state*.json`) không được chuyển sang. Vị thế do bản cũ mở sẽ hiện là "vị thế ngoài bot".

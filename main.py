@@ -21,7 +21,7 @@ from config import settings
 from engine import BotConfig, TradingEngine
 from journal import Journal
 from risk import RiskConfig
-from strategy import StrategyParams
+from strategy import SETUPS, StrategyParams
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -193,7 +193,8 @@ def close_untracked(req: SymbolsRequest):
 
 @app.get("/api/config")
 def get_config():
-    return {"config": engine.config.model_dump(), "defaults": BotConfig().model_dump()}
+    return {"config": engine.config.model_dump(), "defaults": BotConfig().model_dump(),
+            "setups": [vars(setup) for setup in SETUPS.values()]}
 
 
 @app.post("/api/config")
@@ -220,6 +221,7 @@ def dashboard(days: int = Query(30, ge=0, le=3650)):
         "summary": metrics.summarise(trades),
         "per_symbol": metrics.group(trades, "symbol"),
         "by_reason": metrics.group(trades, "reason"),
+        "by_setup": metrics.group(trades, "setup"),
         "equity_curve": curve,
         "max_drawdown_pct": metrics.max_drawdown_pct([p["equity"] for p in curve]),
         "trades": list(reversed(trades))[:200],
@@ -231,7 +233,7 @@ def dashboard(days: int = Query(30, ge=0, le=3650)):
 class BacktestRequest(BaseModel):
     model_config = {"extra": "forbid"}
     symbols: List[str] = Field(min_length=1, max_length=backtest_module.MAX_SYMBOLS)
-    days: int = Field(180, ge=7, le=backtest_module.MAX_DAYS)
+    days: int = Field(365, ge=7, le=backtest_module.MAX_DAYS)
     initial_balance: float = Field(1000, gt=0, le=1e9, allow_inf_nan=False)
     risk: Optional[RiskConfig] = None           # default: the bot's saved configuration
     strategy: Optional[StrategyParams] = None
@@ -252,7 +254,8 @@ def run_backtest(req: BacktestRequest):
         raise HTTPException(status_code=429, detail="Đang chạy một backtest khác. Đợi xong rồi thử lại.")
     try:
         config.end_ms = int(time.time() * 1000) // 3_600_000 * 3_600_000
-        key = (config.source, tuple(config.symbols), config.days, config.end_ms)
+        # The candles to download depend on which setups are traded (their timeframes).
+        key = (config.source, tuple(config.symbols), config.days, config.end_ms, tuple(config.strategy.setups))
         data = _backtest_cache.get(key)
         if data is None:
             data = backtest_module.load_data(config)

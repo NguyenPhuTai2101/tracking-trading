@@ -1,8 +1,10 @@
 """Portfolio backtester. Runs the exact strategy.py and risk.py the live bot runs.
 
 Execution model (deliberately conservative):
-- A signal is read on a closed 1h candle; the entry fills at the next candle's open plus
-  slippage. It is skipped if that open moved more than 1% from the signal close.
+- Each traded setup reads its own timeframe (1h or 4h). A signal is read on a closed candle;
+  the entry fills at the next candle's open plus slippage. It is skipped if that open moved
+  more than 1% from the signal close. One position per symbol, whatever the setup.
+- A position is managed on the candles of the setup that opened it.
 - Size comes from risk.plan_entry with the simulated equity, open positions and the same
   circuit breakers, so the daily/weekly limits and the drawdown ladder are part of the test.
 - Exits use each candle's high/low. A gap through the stop fills at the open. A candle that
@@ -17,7 +19,8 @@ A backtest is a hypothesis, not proof. The report therefore includes:
   exact setting is fitted to noise.
 
 CLI:
-    python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT --days 180 --robust
+    python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT --days 730 --robust
+    python backtest.py --setups THRUST_BREAKOUT TREND_PULLBACK --days 365
 """
 import argparse
 import sys
@@ -35,14 +38,14 @@ import risk
 import strategy
 from config import settings
 from risk import RiskConfig
-from strategy import INTERVAL_SECONDS, REGIME_INTERVAL, SIGNAL_INTERVAL, StrategyParams
+from strategy import INTERVAL_SECONDS, StrategyParams
 
 BTC = "BTCUSDT"
-MAX_DAYS = 365
+MAX_DAYS = 1095
 MAX_SYMBOLS = 15
 IN_SAMPLE_FRACTION = 0.7
-SIGNAL_WARMUP = 150        # 1h candles loaded before the tested period
-REGIME_WARMUP = 500        # 4h candles; EMA200 needs a long run-in
+SIGNAL_WARMUP = 200        # signal candles loaded before the tested period
+REGIME_WARMUP = 500        # regime candles; EMA200 needs a long run-in
 MAX_ENTRY_GAP = 0.01
 PAGE = 1500
 
@@ -62,7 +65,7 @@ SKIP_LABELS = {
     "LIQUIDATION": "SL quá gần giá thanh lý",
     "TOO_SMALL": "Khối lượng dưới mức tối thiểu",
     "GAP": "Giá mở lệch quá 1% so với tín hiệu",
-    "NEAR_STOP": "Giá mở đã sát SL",
+    "NEAR_STOP": "Giá mở đã sát SL hoặc đã qua mục tiêu",
 }
 
 
@@ -114,6 +117,7 @@ def fetch_history(symbol, interval, start_ms, end_ms, source="live", session=Non
         cursor = int(rows[-1][0]) + step
         if len(rows) < PAGE:
             break
+        time.sleep(0.2)                 # long histories: stay under the request-weight limit
     return candles
 
 
@@ -134,17 +138,20 @@ def fetch_funding(symbol, start_ms, end_ms, session=None):
 
 
 def load_data(config: BacktestConfig):
-    step = INTERVAL_SECONDS[SIGNAL_INTERVAL] * 1000
+    """Candles for every timeframe the traded setups read, plus funding. Public data, no API keys."""
+    setups = [strategy.SETUPS[key] for key in config.strategy.setups]
+    regime_tfs = {s.regime_interval for s in setups}
+    tfs = {s.interval for s in setups} | regime_tfs
+    step = min(INTERVAL_SECONDS[s.interval] for s in setups) * 1000
     end_ms = config.end_ms or int(time.time() * 1000) // step * step      # last fully closed boundary
     start_ms = end_ms - config.days * 86_400_000
-    regime_start = start_ms - REGIME_WARMUP * INTERVAL_SECONDS[REGIME_INTERVAL] * 1000
-    data = {"start_ms": start_ms, "end_ms": end_ms, "signal": {}, "regime": {}, "funding": {}, "funding_ok": True}
+    data = {"start_ms": start_ms, "end_ms": end_ms, "candles": {}, "funding": {}, "funding_ok": True}
     with requests.Session() as session:
-        for sym in config.symbols:
-            data["signal"][sym] = fetch_history(sym, SIGNAL_INTERVAL, start_ms - SIGNAL_WARMUP * step, end_ms,
-                                                config.source, session)
-        for sym in dict.fromkeys([*config.symbols, BTC]):
-            data["regime"][sym] = fetch_history(sym, REGIME_INTERVAL, regime_start, end_ms, config.source, session)
+        for tf in sorted(tfs, key=INTERVAL_SECONDS.get):
+            warmup = (REGIME_WARMUP if tf in regime_tfs else SIGNAL_WARMUP) * INTERVAL_SECONDS[tf] * 1000
+            symbols = dict.fromkeys([*config.symbols, BTC]) if tf in regime_tfs else config.symbols
+            data["candles"][tf] = {sym: fetch_history(sym, tf, start_ms - warmup, end_ms, config.source, session)
+                                   for sym in symbols}
         try:
             for sym in config.symbols:
                 data["funding"][sym] = fetch_funding(sym, start_ms, end_ms, session)
@@ -156,7 +163,7 @@ def load_data(config: BacktestConfig):
 # ----------------------------- simulation -----------------------------
 
 class _Regime:
-    """Regime of the last 4h candle that had closed by a given time (no look-ahead)."""
+    """Regime of the last candle that had closed by a given time (no look-ahead)."""
 
     def __init__(self, candles, params):
         self.closes = [c["close_time_ms"] for c in candles]
@@ -170,23 +177,35 @@ class _Regime:
 def run_backtest(config: BacktestConfig, data: Dict) -> Dict:
     params, cfg = config.strategy, config.risk
     start_ms, end_ms = data["start_ms"], data["end_ms"]
-    step_ms = INTERVAL_SECONDS[SIGNAL_INTERVAL] * 1000
-    series = {}
-    for sym in config.symbols:
-        candles = data["signal"].get(sym) or []
-        if len(candles) < 100:
-            continue
-        series[sym] = {"candles": candles, "ind": strategy.signal_indicators(candles),
-                       "index": {c["time"]: i for i, c in enumerate(candles)},
-                       "regime": _Regime(data["regime"].get(sym) or [], params),
-                       "funding": data["funding"].get(sym, []), "funding_at": 0}
-    btc_regime = _Regime(data["regime"].get(BTC) or [], params)
-    timeline = sorted({c["time"] for s in series.values() for c in s["candles"] if c["time"] * 1000 >= start_ms})
+    setups = [strategy.SETUPS[key] for key in params.setups]
+    seconds = INTERVAL_SECONDS
+    base = min((s.interval for s in setups), key=seconds.get)       # the clock the simulation ticks on
+    base_step = seconds[base]
+    # One feed per (timeframe, symbol): candles, their indicators, and a lookup by open time.
+    feeds: Dict[str, Dict[str, Dict]] = {}
+    for tf in {s.interval for s in setups}:
+        feeds[tf] = {}
+        for sym in config.symbols:
+            candles = data["candles"].get(tf, {}).get(sym) or []
+            if len(candles) >= 100:
+                feeds[tf][sym] = {"candles": candles, "ind": strategy.signal_indicators(candles, params),
+                                  "index": {c["time"]: i for i, c in enumerate(candles)}}
+    symbols = [sym for sym in config.symbols if sym in feeds[base]]
+    regimes = {}
+
+    def regime(sym, tf, time_ms):
+        key = (sym, tf)
+        if key not in regimes:
+            regimes[key] = _Regime(data["candles"].get(tf, {}).get(sym) or [], params)
+        return regimes[key].at(time_ms)
+
+    funding = {sym: {"rows": data["funding"].get(sym, []), "at": 0} for sym in symbols}
+    timeline = sorted({c["time"] for sym in symbols for c in feeds[base][sym]["candles"] if c["time"] * 1000 >= start_ms})
 
     state = risk.new_state()
     balance = equity = config.initial_balance
     positions: Dict[str, Dict] = {}
-    pending: Dict[str, strategy.Signal] = {}
+    pending: Dict[str, tuple] = {}             # symbol -> (signal, open time of the candle it must fill on)
     last_exit: Dict[str, int] = {}
     trades, curve, skipped = [], [], Counter()
     funding_total = 0.0
@@ -210,8 +229,8 @@ def run_backtest(config: BacktestConfig, data: Dict) -> Dict:
             return
         net = pos["realized"] - pos["fees"] + pos["funding"]
         trades.append({
-            "symbol": sym, "direction": pos["plan"]["direction"], "entry_time": pos["entry_time"],
-            "exit_time": time_ms, "entry_price": pos["plan"]["entry"],
+            "symbol": sym, "direction": pos["plan"]["direction"], "setup": pos["setup"],
+            "entry_time": pos["entry_time"], "exit_time": time_ms, "entry_price": pos["plan"]["entry"],
             "exit_price": pos["exit_notional"] / pos["initial_quantity"], "quantity": pos["initial_quantity"],
             "gross_pnl": round(pos["realized"], 6), "fees": round(pos["fees"], 6),
             "funding": round(pos["funding"], 6), "net_pnl": round(net, 6),
@@ -231,6 +250,11 @@ def run_backtest(config: BacktestConfig, data: Dict) -> Dict:
         if s * (fill - signal.stop) < 0.5 * s * (signal.price - signal.stop):
             skipped["NEAR_STOP"] += 1
             return
+        try:
+            plan = strategy.new_plan(signal.direction, fill, signal.stop, signal.exit)
+        except ValueError:                      # the open already passed the target
+            skipped["NEAR_STOP"] += 1
+            return
         used_margin = sum(p["quantity"] * p["plan"]["entry"] for p in positions.values()) / cfg.leverage
         decision = risk.plan_entry(symbol=sym, direction=signal.direction, entry=signal.price, stop=signal.stop,
                                    equity=equity, available=equity - used_margin, positions=views(),
@@ -242,20 +266,23 @@ def run_backtest(config: BacktestConfig, data: Dict) -> Dict:
         notional = quantity * fill
         fee = notional * cfg.fee_rate
         balance -= fee
-        plan = strategy.new_plan(signal.direction, fill, signal.stop, params)
-        positions[sym] = {"plan": plan, "quantity": quantity, "initial_quantity": quantity,
+        positions[sym] = {"plan": plan, "setup": signal.setup, "interval": strategy.SETUPS[signal.setup].interval,
+                          "quantity": quantity, "initial_quantity": quantity,
                           "entry_time": candle["time"] * 1000, "exit_notional": 0.0, "realized": 0.0,
                           "fees": fee, "funding": 0.0, "mark": fill,
                           "risk_usdt": quantity * plan["r"] + cfg.round_trip_cost * notional}
 
-    def manage(sym, pos, candle, atr_value, feed):
+    def manage(sym, pos, candle, atr_value):
+        """Apply one closed candle of the position's own timeframe."""
         nonlocal balance, funding_total
         plan = pos["plan"]
         s = 1 if plan["direction"] == "LONG" else -1
         close_ms = candle["close_time_ms"]
-        while feed["funding_at"] < len(feed["funding"]) and feed["funding"][feed["funding_at"]][0] <= close_ms:
-            when, rate = feed["funding"][feed["funding_at"]]
-            feed["funding_at"] += 1
+        feed = funding[sym]
+        while feed["at"] < len(feed["rows"]) and feed["rows"][feed["at"]][0] <= close_ms:
+            when, rate = feed["rows"][feed["at"]]
+            feed["at"] += 1
+            # Settlements before the position existed are not this trade's cost.
             if when > max(pos["entry_time"], candle["time"] * 1000):
                 payment = -s * pos["quantity"] * candle["open"] * rate      # longs pay a positive rate
                 balance += payment
@@ -265,48 +292,67 @@ def run_backtest(config: BacktestConfig, data: Dict) -> Dict:
         if event and event[0] == "STOP":
             close(sym, pos, pos["quantity"], event[1], strategy.stop_reason(plan), close_ms)
             return
+        if event and event[0] == "TARGET":
+            close(sym, pos, pos["quantity"], event[1], "TAKE_PROFIT", close_ms)
+            return
         if event and event[0] == "PARTIAL":
             plan["partial_done"] = True
-            close(sym, pos, pos["quantity"] * params.partial_fraction, event[1], "PARTIAL_TP", close_ms)
-        if strategy.advance(plan, candle, atr_value, params) == "TIME_STOP":
+            close(sym, pos, pos["quantity"] * plan["exit"]["partial_fraction"], event[1], "PARTIAL_TP", close_ms)
+        if strategy.advance(plan, candle, atr_value) == "TIME_STOP":
             close(sym, pos, pos["quantity"], candle["close"], "TIME_STOP", close_ms)
-            return
-        pos["mark"] = candle["close"]
+
+    def closing(tf, sym, close_s):
+        """(feed, index) of the `tf` candle that closes at second `close_s`, if there is one."""
+        feed = feeds[tf].get(sym)
+        i = feed["index"].get(close_s - seconds[tf]) if feed and close_s % seconds[tf] == 0 else None
+        return (feed, i) if i is not None else (None, None)
 
     for t in timeline:
-        for sym, feed in series.items():
-            i = feed["index"].get(t)
+        close_s = t + base_step
+        close_ms = close_s * 1000 - 1
+        for sym in symbols:
+            i = feeds[base][sym]["index"].get(t)
             if i is None:
                 continue
-            candle = feed["candles"][i]
-            signal = pending.pop(sym, None)
-            if signal and sym not in positions:
+            candle = feeds[base][sym]["candles"][i]
+            signal, fill_at = pending.pop(sym, (None, None))
+            if signal and fill_at == t and sym not in positions:
                 enter(sym, signal, candle)
-            # Funding settlements before a position existed are not this trade's cost.
             if sym in positions:
-                manage(sym, positions[sym], candle, feed["ind"]["atr"][i], feed)
-        close_ms = (t + INTERVAL_SECONDS[SIGNAL_INTERVAL]) * 1000 - 1
+                feed, j = closing(positions[sym]["interval"], sym, close_s)
+                if feed:
+                    manage(sym, positions[sym], feed["candles"][j], feed["ind"]["atr"][j])
+            if sym in positions:
+                positions[sym]["mark"] = candle["close"]
         equity = balance + sum((1 if p["plan"]["direction"] == "LONG" else -1)
                                * (p["mark"] - p["plan"]["entry"]) * p["quantity"] for p in positions.values())
         risk.roll(state, equity, datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc), cfg)
         curve.append({"time": close_ms, "equity": round(equity, 4)})
-        for sym, feed in series.items():
-            i = feed["index"].get(t)
-            if i is None or sym in positions:
+        for sym in symbols:
+            if sym in positions or sym in pending:
                 continue
-            exit_ms = last_exit.get(sym, 0)
-            if cfg.cooldown_candles and t * 1000 < exit_ms // step_ms * step_ms + cfg.cooldown_candles * step_ms:
-                continue
-            signal, _ = strategy.evaluate(feed["candles"], feed["ind"], i, feed["regime"].at(close_ms),
-                                          btc_regime.at(close_ms), params)
-            if signal:
-                pending[sym] = signal
+            for setup in setups:                    # in priority order; the first one that fires wins
+                feed, j = closing(setup.interval, sym, close_s)
+                if not feed:
+                    continue
+                step_ms = seconds[setup.interval] * 1000
+                opened_ms = (close_s - seconds[setup.interval]) * 1000
+                cooling_until = last_exit.get(sym, 0) // step_ms * step_ms + cfg.cooldown_candles * step_ms
+                if cfg.cooldown_candles and opened_ms < cooling_until:
+                    continue
+                signal, _ = strategy.evaluate(setup.key, feed["candles"], feed["ind"], j,
+                                              regime(sym, setup.regime_interval, close_ms),
+                                              regime(BTC, setup.regime_interval, close_ms), params)
+                if signal:
+                    pending[sym] = (signal, close_s)        # fills at the open of the next base candle
+                    break
 
     for sym, pos in list(positions.items()):       # mark what is still open at the last close
         close(sym, pos, pos["quantity"], pos["mark"], "END_OF_TEST", end_ms)
     if curve:
         curve[-1]["equity"] = round(balance, 4)
 
+    series = {sym: feeds[base][sym] for sym in symbols}
     return _report(config, data, series, trades, curve, skipped, balance, funding_total, state)
 
 
@@ -362,6 +408,7 @@ def _report(config, data, series, trades, curve, skipped, balance, funding_total
                      "average_pct": round(sum(hold.values()) / len(hold), 2) if hold else None},
         "per_symbol": metrics.group(trades, "symbol"),
         "by_reason": metrics.group(trades, "reason"),
+        "by_setup": metrics.group(trades, "setup"),
         "skipped": [{"code": code, "label": SKIP_LABELS.get(code, code), "count": count}
                     for code, count in skipped.most_common()],
         "equity_curve": points,
@@ -373,16 +420,23 @@ def _report(config, data, series, trades, curve, skipped, balance, funding_total
 # ----------------------------- robustness -----------------------------
 
 def robustness(config: BacktestConfig, data: Dict) -> List[Dict]:
-    """Re-run with each key parameter nudged down and up. Look for results that stay similar."""
+    """Re-run with each key parameter of the traded setups nudged down and up.
+    Look for results that stay similar: an edge that needs one exact setting is noise."""
     base = config.strategy
+    knobs = []
+    if "THRUST_BREAKOUT" in base.setups:
+        knobs += [("breakout_lookback", "Số nến phá vỡ", base.breakout_lookback // 2, base.breakout_lookback * 2),
+                  ("breakout_stop_atr", "SL phá vỡ (ATR)", base.breakout_stop_atr * 0.75, base.breakout_stop_atr * 1.5),
+                  ("breakout_trail_atr", "Trailing phá vỡ (ATR)", base.breakout_trail_atr - 1, base.breakout_trail_atr + 1)]
+    if "TREND_PULLBACK" in base.setups:
+        knobs += [("stop_atr_min", "SL pullback tối thiểu (ATR)", base.stop_atr_min * 0.8, base.stop_atr_min * 1.2),
+                  ("trail_atr", "Trailing pullback (ATR)", base.trail_atr * 0.8, base.trail_atr * 1.2),
+                  ("pullback_lookback", "Số nến tìm nhịp hồi", base.pullback_lookback - 2, base.pullback_lookback + 2)]
+    knobs.append(("adx_min", "ADX tối thiểu", base.adx_min - 5, base.adx_min + 5))
     variants = [("Cấu hình hiện tại", {})]
-    for name, label, low, high in (
-            ("adx_min", "ADX tối thiểu", base.adx_min - 5, base.adx_min + 5),
-            ("stop_atr_min", "SL tối thiểu (ATR)", base.stop_atr_min * 0.8, base.stop_atr_min * 1.2),
-            ("trail_atr", "Trailing (ATR)", base.trail_atr * 0.8, base.trail_atr * 1.2),
-            ("pullback_lookback", "Số nến tìm nhịp hồi", base.pullback_lookback - 2, base.pullback_lookback + 2)):
+    for name, label, low, high in knobs:
         for value in (low, high):
-            value = round(value) if name == "pullback_lookback" else round(value, 2)
+            value = round(value) if isinstance(getattr(base, name), int) else round(value, 2)
             variants.append((f"{label} = {value:g}", {name: value}))
     rows = []
     for label, change in variants:
@@ -414,6 +468,9 @@ def _print_report(result):
     line("70% đầu", i)
     line("30% cuối", o)
     print(f"  Mua & giữ (trung bình các mã): {result['buy_hold']['average_pct']}%")
+    for row in result["by_setup"]:
+        print(f"  {strategy.SETUPS[row['setup']].label:<30} lệnh {row['trades']:>4} | R trung bình {row['avg_r']:>+5.2f} "
+              f"| net {row['net_pnl']:>+9.2f}")
     for row in result["skipped"]:
         print(f"  Bỏ qua {row['count']:>4} tín hiệu: {row['label']}")
     for warning in result["warnings"]:
@@ -421,9 +478,11 @@ def _print_report(result):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Backtest chiến lược pullback thuận xu hướng với mô hình vốn của bot.")
+    parser = argparse.ArgumentParser(description="Backtest các setup của bot với đúng mô hình vốn của bot.")
     parser.add_argument("--symbols", nargs="+", default=["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"])
-    parser.add_argument("--days", type=int, default=180)
+    parser.add_argument("--setups", nargs="+", default=None, choices=sorted(strategy.SETUPS),
+                        help="setup được vào lệnh (mặc định: như cấu hình mặc định của bot)")
+    parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--balance", type=float, default=1000.0)
     parser.add_argument("--risk", type=float, default=None, help="%% vốn rủi ro mỗi lệnh")
     parser.add_argument("--leverage", type=int, default=None)
@@ -432,9 +491,10 @@ def main(argv=None):
     parser.add_argument("--robust", action="store_true", help="chạy thêm các biến thể tham số")
     args = parser.parse_args(argv)
     risk_changes = {k: v for k, v in (("risk_pct", args.risk), ("leverage", args.leverage)) if v is not None}
+    strategy_changes = {"allow_short": not args.no_short, **({"setups": args.setups} if args.setups else {})}
     config = BacktestConfig(args.symbols, args.days, args.balance, RiskConfig(**risk_changes),
-                            StrategyParams(allow_short=not args.no_short), args.source)
-    print(f"Tải dữ liệu {len(config.symbols)} mã, {config.days} ngày...")
+                            StrategyParams(**strategy_changes), args.source)
+    print(f"Tải dữ liệu {len(config.symbols)} mã, {config.days} ngày, setup: {', '.join(config.strategy.setups)}...")
     data = load_data(config)
     _print_report(run_backtest(config, data))
     if args.robust:

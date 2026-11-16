@@ -16,12 +16,15 @@ const clock = (ms) => new Date(ms).toLocaleTimeString("vi-VN", { hour: "2-digit"
 
 const REASONS = {
   STOP_LOSS: "Cắt lỗ", BREAKEVEN_STOP: "SL hòa vốn", TRAILING_STOP: "Trailing stop", TIME_STOP: "Hết thời gian",
-  PARTIAL_TP: "Chốt một phần", MANUAL_CLOSE: "Đóng tay", MANUAL_CLOSE_ALL: "Đóng tất cả",
+  PARTIAL_TP: "Chốt một phần", TAKE_PROFIT: "Chạm mục tiêu", MANUAL_CLOSE: "Đóng tay", MANUAL_CLOSE_ALL: "Đóng tất cả",
   PROTECTION_FAILED: "Không đặt được SL", INVALID_STOP: "Khớp sai phía SL", CANCEL_ENTRY: "Hủy lệnh vào",
   END_OF_TEST: "Hết giai đoạn thử",
 };
 const REGIMES = { UP: "↑ Tăng", DOWN: "↓ Giảm", RANGE: "→ Đi ngang" };
 const STOP_KINDS = { INITIAL: "ban đầu", BREAKEVEN: "hòa vốn", TRAIL: "trailing" };
+const TAGS = { SQUEEZE: "Nén biến động", SHOCK: "Sốc biến động", OVERBOUGHT: "Quá mua", OVERSOLD: "Quá bán" };
+let SETUPS = {};      // key -> {label, interval, regime_interval, case, evidence}, from /api/config
+const setupLabel = (key) => esc(SETUPS[key]?.label || key);
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -227,6 +230,7 @@ function renderPositions(s) {
   $("positions").innerHTML = table([
     { title: "Mã", cell: (p) => `<b>${esc(p.symbol)}</b>` },
     { title: "Chiều", cell: (p) => `<span class="tag">${p.direction === "LONG" ? "↑ LONG" : "↓ SHORT"}</span>` },
+    { title: "Case", cell: (p) => `${setupLabel(p.setup)} <span class="muted">${esc(p.interval)}</span>` },
     { title: "Khối lượng", cls: "r", cell: (p) => price(p.quantity) },
     { title: "Giá vào", cls: "r", cell: (p) => price(p.entry_price) },
     { title: "Giá hiện tại", cls: "r", cell: (p) => price(p.current_price) },
@@ -245,14 +249,19 @@ function renderPositions(s) {
   });
 }
 
+function caseLine(c) {
+  const mark = c.traded ? "●" : "○";
+  const head = `${mark} <b>${setupLabel(c.setup)}</b> <span class="muted">${esc(c.interval)} · ${REGIMES[c.regime] || esc(c.regime)}</span>`;
+  const signal = c.signal ? `<span class="tag">${c.signal === "LONG" ? "↑ LONG" : "↓ SHORT"}</span> ` : "";
+  return `<div class="case ${c.signal ? "fired" : ""}">${head}<br>${signal}<span class="${c.signal ? "" : "muted"}">${esc(c.note)}</span></div>`;
+}
+
 function renderScanBoard(s) {
+  const tagText = (row) => [...new Set(Object.values(row.tags || {}).flat())].map((t) => `<span class="tag">${esc(TAGS[t] || t)}</span>`).join(" ");
   $("scan-board").innerHTML = table([
-    { title: "Mã", cell: (r) => `<b>${esc(r.symbol)}</b>` },
-    { title: "Giá", cls: "r", cell: (r) => price(r.price) },
-    { title: "4h", cell: (r) => REGIMES[r.regime] || esc(r.regime) },
-    { title: "Ghi chú", cls: "wrap", cell: (r) => (r.signal ? `<b>${esc(r.signal)}</b> · ` : "") + esc(r.note) },
-    { title: "Nến", cell: (r) => `<span class="muted">${dateTime(r.time)}</span>` },
-  ], s.scan_board, s.is_running ? "Đang chờ nến 1h kế tiếp đóng để quét." : "Bảng này hiện kết quả quét khi bot chạy.");
+    { title: "Mã", cell: (r) => `<b>${esc(r.symbol)}</b><br><span class="muted num">${price(r.price)}</span><br>${tagText(r)}` },
+    { title: "Case (● vào lệnh · ○ quan sát)", cls: "wrap", cell: (r) => r.cases.map(caseLine).join("") },
+  ], s.scan_board, s.is_running ? "Đang chờ nến kế tiếp đóng để quét (1h và 4h)." : "Bảng này hiện kết quả quét khi bot chạy.");
 }
 
 function renderLog(s) {
@@ -305,6 +314,7 @@ const tradeColumns = [
   { title: "Đóng lúc", cell: (t) => dateTime(t.exit_time) },
   { title: "Mã", cell: (t) => `<b>${esc(t.symbol)}</b>` },
   { title: "Chiều", cell: (t) => t.direction === "LONG" ? "↑ LONG" : "↓ SHORT" },
+  { title: "Case", cell: (t) => setupLabel(t.setup) },
   { title: "Giá vào", cls: "r", cell: (t) => price(t.entry_price) },
   { title: "Giá ra", cls: "r", cell: (t) => price(t.exit_price) },
   { title: "Ròng (USDT)", cls: "r", cell: (t) => `<span class="${tone(t.net_pnl)}">${signed(t.net_pnl)}</span>` },
@@ -328,6 +338,7 @@ async function refreshPerformance() {
   lineChart($("perf-chart"), data.equity_curve);
   $("perf-symbols").innerHTML = table(groupColumns("symbol", "Mã"), data.per_symbol, "Chưa có lệnh đã đóng.");
   $("perf-reasons").innerHTML = table(groupColumns("reason", "Lý do", reasonLabel), data.by_reason, "Chưa có lệnh đã đóng.");
+  $("perf-setups").innerHTML = table(groupColumns("setup", "Case", setupLabel), data.by_setup, "Chưa có lệnh đã đóng.");
   $("perf-trades").innerHTML = table(tradeColumns, data.trades, "Chưa có lệnh đã đóng.");
 }
 
@@ -355,7 +366,12 @@ const FIELDS = {
   ],
   "form-strategy": [
     ["strategy.allow_short", "Cho phép SHORT", "", "bool"],
-    ["strategy.adx_min", "ADX 4h tối thiểu", "Dưới mức này coi là đi ngang và đứng ngoài.", 1],
+    ["strategy.adx_min", "ADX tối thiểu của xu hướng", "Dưới mức này khung xu hướng (4h hoặc ngày) được coi là đi ngang.", 1],
+    ["strategy.breakout_lookback", "Phá vỡ: số nến 4h", "Giá phải đóng vượt đỉnh/đáy của chừng này nến.", 1],
+    ["strategy.breakout_stop_atr", "Phá vỡ: SL (ATR)", "", 0.1],
+    ["strategy.breakout_trail_atr", "Phá vỡ: trailing (ATR)", "Không dời hòa vốn, không chốt một phần: để lệnh thắng chạy.", 0.1],
+  ],
+  "form-pullback": [
     ["strategy.pullback_lookback", "Số nến tìm nhịp hồi (1h)", "", 1],
     ["strategy.rsi_pullback", "RSI nhịp hồi", "LONG cần RSI lùi về dưới mức này; SHORT đối xứng qua 50.", 1],
     ["strategy.stop_atr_min", "SL tối thiểu (ATR)", "", 0.1],
@@ -368,6 +384,16 @@ const FIELDS = {
   ],
 };
 let defaults = null;
+
+function buildSetupList() {
+  $("form-setups").innerHTML = Object.values(SETUPS).map((s) => `
+    <div class="setup">
+      <div class="field check"><input type="checkbox" id="setup-${s.key}" data-setup="${s.key}">
+        <label for="setup-${s.key}">${esc(s.label)} <span class="muted">· tín hiệu ${esc(s.interval)}, xu hướng ${esc(s.regime_interval)}</span></label></div>
+      <div class="hint">${esc(s.case)}</div>
+      <div class="evidence"><b>Nghiên cứu:</b> ${esc(s.evidence)}</div>
+    </div>`).join("");
+}
 
 function buildForms() {
   for (const [formId, fields] of Object.entries(FIELDS)) {
@@ -388,6 +414,7 @@ function fillForms(config) {
     if (input.type === "checkbox") input.checked = Boolean(config[group][key]);
     else input.value = config[group][key];
   });
+  document.querySelectorAll("[data-setup]").forEach((box) => { box.checked = config.strategy.setups.includes(box.dataset.setup); });
   $("f-watchlist").value = config.watchlist.join(", ");
   $("bt-symbols").value = config.watchlist.join(", ");
 }
@@ -400,12 +427,15 @@ function readForms() {
     const [group, key] = input.dataset.path.split(".");
     config[group][key] = input.type === "checkbox" ? input.checked : Number(input.value);
   });
+  config.strategy.setups = [...document.querySelectorAll("[data-setup]")].filter((box) => box.checked).map((box) => box.dataset.setup);
   return config;
 }
 
 async function loadConfig() {
   const data = await api("/api/config");
   defaults = data.defaults;
+  SETUPS = Object.fromEntries(data.setups.map((s) => [s.key, s]));
+  buildSetupList();
   fillForms(data.config);
 }
 
@@ -434,6 +464,7 @@ function renderBacktest(r) {
   ], r.skipped, "Không có tín hiệu nào bị chặn.");
   $("bt-symbols-table").innerHTML = table(groupColumns("symbol", "Mã"), r.per_symbol, "Không có lệnh.");
   $("bt-reasons").innerHTML = table(groupColumns("reason", "Lý do", reasonLabel), r.by_reason, "Không có lệnh.");
+  $("bt-setups").innerHTML = table(groupColumns("setup", "Case", setupLabel), r.by_setup, "Không có lệnh.");
   $("bt-robust-card").hidden = !r.robustness;
   if (r.robustness) {
     $("bt-robust-table").innerHTML = table([
@@ -517,7 +548,8 @@ $("btn-backtest").onclick = runBacktest;
   buildForms();
   let saved = "overview";
   try { saved = localStorage.getItem("tab") || saved; } catch (_) { /* private mode */ }
-  await Promise.all([refreshStatus(), loadConfig().catch((error) => toast(error.message, true))]);
+  await loadConfig().catch((error) => toast(error.message, true));
+  await refreshStatus();
   showTab(["overview", "performance", "settings", "backtest"].includes(saved) ? saved : "overview");
   api("/api/auth/status").then((auth) => { $("btn-logout").hidden = !auth.enabled; }).catch(() => {});
   setInterval(() => { if (!document.hidden) refreshStatus(); }, 3000);
