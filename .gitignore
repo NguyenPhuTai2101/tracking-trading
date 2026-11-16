@@ -9,3 +9,5 @@ bot_state.json.lock
 bot_state_spot.json*
 bot_state_futures.json*
 demo_stop_probe.json
+trading.db*
+research_*.pkl

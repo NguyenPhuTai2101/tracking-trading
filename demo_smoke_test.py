@@ -11,7 +11,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from binance_client import binance_client as client
-from bot_manager import bot_manager
+from engine import TradingEngine
+from journal import Journal
+from main import STATE_DIR
 
 
 JOURNAL = Path(__file__).with_name("demo_stop_probe.json")
@@ -45,16 +47,16 @@ def check(probe_stop=False):
     if not probe_stop:
         return report
 
-    bot_manager.acquire_locks()
+    # Taking the bot's process lock proves the application is not running.
+    bot = TradingEngine(client, Journal(STATE_DIR / "trading.db"))
+    bot.acquire_process_lock()
     try:
-        bot_manager.load()
         if JOURNAL.exists():
             key = json.loads(JOURNAL.read_text(encoding="utf-8"))["id"]
             if not re.fullmatch(r"probe_[a-f0-9]{28}", key):
                 raise RuntimeError("Journal probe không hợp lệ")
             report["recovered_probe"] = cleanup_probe(key)
-        if any(bot.state_error or bot.active_positions or bot.pending_orders or bot.protective_orders
-               for bot in bot_manager.engines.values()):
+        if bot.state_error or bot.positions or bot.pending_orders or bot.protective_orders:
             raise RuntimeError("Bot phải hết vị thế và lệnh chờ trước khi probe")
         if any(float(p["positionAmt"]) for p in client.get_futures_positions(strict=True)):
             raise RuntimeError("Tài khoản Demo Futures phải hết vị thế trước khi probe")
@@ -96,7 +98,7 @@ def check(probe_stop=False):
             raise RuntimeError("Tài khoản đã thay đổi vị thế trong lúc probe")
         return report
     finally:
-        bot_manager.release_locks()
+        bot.release_process_lock()
 
 
 if __name__ == "__main__":
