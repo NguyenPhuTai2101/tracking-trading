@@ -20,6 +20,7 @@ from binance_client import binance_client
 from config import settings
 from engine import BotConfig, TradingEngine
 from journal import Journal
+from notifier import TelegramNotifier
 from risk import RiskConfig
 from strategy import SETUPS, StrategyParams
 
@@ -28,7 +29,7 @@ STATIC_DIR = BASE_DIR / "static"
 STATE_DIR = Path(os.getenv("STATE_DIR") or BASE_DIR)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-engine = TradingEngine(binance_client, Journal(STATE_DIR / "trading.db"))
+engine = TradingEngine(binance_client, Journal(STATE_DIR / "trading.db"), notifier=TelegramNotifier.from_env())
 
 
 @asynccontextmanager
@@ -153,6 +154,7 @@ def get_status():
     status = engine.get_status()
     status["logs"] = engine.journal.events(80)
     status["exchange"] = {"futures_url": settings.FUTURES_BASE_URL}
+    status["telegram"] = engine.notifier.status() if engine.notifier else {"configured": False}
     return status
 
 
@@ -191,6 +193,17 @@ def close_untracked(req: SymbolsRequest):
     return engine.close_untracked_positions(req.symbols)
 
 
+@app.post("/api/notify/test")
+def notify_test():
+    """Send one Telegram message now and report Telegram's answer, to check the token and chat id."""
+    if not engine.notifier:
+        raise HTTPException(status_code=400, detail="Chưa cấu hình Telegram.")
+    ok, error = engine.notifier.send_now("✅ Trading Bot: kết nối Telegram hoạt động. Bạn sẽ nhận thông báo ở đây.")
+    if not ok:
+        raise HTTPException(status_code=400, detail=error)
+    return {"success": True, "message": "Đã gửi tin thử. Kiểm tra Telegram."}
+
+
 @app.get("/api/config")
 def get_config():
     return {"config": engine.config.model_dump(), "defaults": BotConfig().model_dump(),
@@ -212,7 +225,8 @@ def market_symbols():
 
 @app.get("/api/dashboard")
 def dashboard(days: int = Query(30, ge=0, le=3650)):
-    """Closed trades net of estimated fees, plus the account equity curve. days=0 = everything."""
+    """Closed trades (real fees and funding once settled, estimated fees until then), what live
+    execution cost against the backtest's assumptions, and the account equity curve. days=0 = everything."""
     since = int((time.time() - days * 86_400) * 1000) if days else 0
     trades = engine.journal.trades(since)
     curve = engine.journal.equity_curve(since)
@@ -222,6 +236,8 @@ def dashboard(days: int = Query(30, ge=0, le=3650)):
         "per_symbol": metrics.group(trades, "symbol"),
         "by_reason": metrics.group(trades, "reason"),
         "by_setup": metrics.group(trades, "setup"),
+        "execution": metrics.execution_quality(trades, engine.config.risk.fee_rate, engine.config.risk.slippage_rate),
+        "expectation": metrics.versus_expectation(trades, SETUPS),
         "equity_curve": curve,
         "max_drawdown_pct": metrics.max_drawdown_pct([p["equity"] for p in curve]),
         "trades": list(reversed(trades))[:200],

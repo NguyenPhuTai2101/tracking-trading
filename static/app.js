@@ -270,6 +270,21 @@ function renderLog(s) {
     : '<div class="empty">Chưa có sự kiện.</div>';
 }
 
+function renderTelegram(t) {
+  const el = $("telegram-status");
+  if (!t || !t.configured) {
+    el.className = "msg muted";
+    el.textContent = "Chưa cấu hình. Đặt TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID trong file .env (xem README) rồi khởi động lại ứng dụng.";
+  } else if (t.last_error) {
+    el.className = "msg down";
+    el.textContent = `✕ Lần gửi gần nhất lỗi: ${t.last_error}`;
+  } else {
+    el.className = "msg up";
+    el.textContent = `✓ Đã cấu hình. Đã gửi ${t.sent} tin từ lúc khởi động.`;
+  }
+  $("btn-telegram-test").disabled = !t || !t.configured;
+}
+
 async function refreshStatus() {
   try {
     status = await api("/api/status");
@@ -279,6 +294,7 @@ async function refreshStatus() {
     return;
   }
   renderPill(status);
+  renderTelegram(status.telegram);
   renderAlerts(status);
   renderTiles(status);
   renderMeters(status);
@@ -296,7 +312,7 @@ function statTiles(m, extra = []) {
     tile("Tỷ lệ thắng", isNum(m.win_rate_pct) ? `${fmt(m.win_rate_pct, 1)}%` : "–", `Chuỗi thua dài nhất ${m.max_consecutive_losses}`),
     tile("Kỳ vọng mỗi lệnh", signed(m.expectancy_r, 2, "R"), `Thắng TB ${signed(m.avg_win_r, 2, "R")} · thua TB ${signed(m.avg_loss_r, 2, "R")}`, tone(m.expectancy_r)),
     tile("Profit factor", isNum(m.profit_factor) ? fmt(m.profit_factor) : "–", "Tổng lãi / tổng lỗ"),
-    tile("Lãi/lỗ ròng", signed(m.net_pnl), `Phí ước tính ${fmt(m.fees)} USDT`, tone(m.net_pnl)),
+    tile("Lãi/lỗ ròng", signed(m.net_pnl), `Phí ${fmt(m.fees)} · funding ${signed(m.funding)} USDT`, tone(m.net_pnl)),
     ...extra,
   ].join("");
 }
@@ -317,11 +333,45 @@ const tradeColumns = [
   { title: "Case", cell: (t) => setupLabel(t.setup) },
   { title: "Giá vào", cls: "r", cell: (t) => price(t.entry_price) },
   { title: "Giá ra", cls: "r", cell: (t) => price(t.exit_price) },
+  { title: "Phí", cls: "r", cell: (t) => `${t.settled === 0 || t.settled === 2 ? "≈ " : ""}${fmt(t.fees)}` },
+  { title: "Funding", cls: "r", cell: (t) => t.settled === 0 ? '<span class="muted">chờ</span>' : signed(t.funding ?? 0) },
   { title: "Ròng (USDT)", cls: "r", cell: (t) => `<span class="${tone(t.net_pnl)}">${signed(t.net_pnl)}</span>` },
   { title: "R", cls: "r", cell: (t) => `<span class="${tone(t.r_multiple)}">${signed(t.r_multiple, 2, "R")}</span>` },
   { title: "Số nến", cls: "r", cell: (t) => t.bars },
   { title: "Lý do thoát", cell: (t) => reasonLabel(t.reason) },
 ];
+
+const pct = (v, digits = 3) => isNum(v) ? `${fmt(v, digits)}%` : "–";
+
+function renderExecution(x) {
+  const rows = [
+    ["Phí mỗi chiều", x.settled_trades ? `${pct(x.fee_rate_pct)} <span class="muted">(${x.settled_trades} lệnh đã đối soát)</span>` : "–", pct(x.assumed_fee_rate_pct)],
+    ["Trượt giá khi vào lệnh", x.slippage_samples ? `${signed(x.entry_slippage_pct, 3, "%")} <span class="muted">(${x.slippage_samples} lệnh)</span>` : "–", `+${pct(x.assumed_slippage_pct)}`],
+    ["Funding", x.settled_trades ? `${signed(x.funding_usdt)} USDT <span class="muted">(${signed(x.funding_r_per_trade, 3, "R")} mỗi lệnh)</span>` : "–", "theo funding lịch sử"],
+  ];
+  $("perf-execution").innerHTML = table([
+    { title: "Hạng mục", cell: (r) => esc(r[0]) },
+    { title: "Chạy thật", cls: "r", cell: (r) => r[1] },
+    { title: "Backtest giả định", cls: "r", cell: (r) => r[2] },
+  ], rows, "") + (x.settled_trades ? "" : '<div class="empty">Chưa có lệnh nào được đối soát với sàn.</div>');
+}
+
+const VERDICTS = {
+  TOO_FEW: "Chưa đủ 20 lệnh để so sánh",
+  WITHIN: "✓ Trong khoảng kỳ vọng",
+  BELOW: "✕ Thấp hơn kỳ vọng: kiểm tra khớp lệnh và chi phí",
+  ABOVE: "↑ Cao hơn kỳ vọng (có thể do may mắn)",
+};
+
+function renderExpectation(rows) {
+  $("perf-expectation").innerHTML = table([
+    { title: "Case", cell: (r) => setupLabel(r.setup) },
+    { title: "Lệnh", cls: "r", cell: (r) => r.trades },
+    { title: "R trung bình", cls: "r", cell: (r) => `<span class="${tone(r.mean_r)}">${signed(r.mean_r, 2, "R")}</span>` },
+    { title: "Khoảng kỳ vọng", cls: "r", cell: (r) => `${signed(r.low_r, 2)} … ${signed(r.high_r, 2, "R")}` },
+    { title: "Nhận xét", cls: "wrap", cell: (r) => esc(VERDICTS[r.verdict] || r.verdict) },
+  ], rows, "Chưa có lệnh đã đóng.");
+}
 
 async function refreshPerformance() {
   let data;
@@ -332,8 +382,12 @@ async function refreshPerformance() {
     return;
   }
   const m = data.summary;
-  $("perf-note").innerHTML = m.low_sample
-    ? `<div class="alert"><span class="icon">ℹ</span><div class="body">Mới có ${m.trades} lệnh trong giai đoạn này. Dưới 30 lệnh thì tỷ lệ thắng và kỳ vọng chưa nói lên điều gì.</div></div>` : "";
+  const notes = [];
+  if (m.low_sample) notes.push(`Mới có ${m.trades} lệnh trong giai đoạn này. Dưới 30 lệnh thì tỷ lệ thắng và kỳ vọng chưa nói lên điều gì.`);
+  if (m.estimated_trades) notes.push(`${m.estimated_trades} lệnh chưa đối soát với sàn (≈): đang dùng phí ước tính và chưa có funding. Bot tự đối soát trong vòng vài phút sau khi đóng lệnh.`);
+  $("perf-note").innerHTML = notes.map((text) => `<div class="alert"><span class="icon">ℹ</span><div class="body">${esc(text)}</div></div>`).join("");
+  renderExecution(data.execution);
+  renderExpectation(data.expectation);
   $("perf-tiles").innerHTML = statTiles(m, [tile("Drawdown tối đa", `${fmt(data.max_drawdown_pct)}%`, "Theo đường vốn tài khoản")]);
   lineChart($("perf-chart"), data.equity_curve);
   $("perf-symbols").innerHTML = table(groupColumns("symbol", "Mã"), data.per_symbol, "Chưa có lệnh đã đóng.");
@@ -363,6 +417,14 @@ const FIELDS = {
     ["risk.dd_reduce_pct", "Drawdown giảm nửa rủi ro (%)", "Tính từ đỉnh vốn.", 1],
     ["risk.dd_halt_pct", "Drawdown dừng bot (%)", "Bot dừng mở lệnh và chờ bạn xác nhận.", 1],
     ["risk.cooldown_candles", "Nghỉ sau khi thoát (nến 1h)", "Bỏ qua tín hiệu của mã vừa đóng lệnh.", 1],
+  ],
+  "form-notify": [
+    ["notify.trades", "Mở / đóng lệnh", "", "bool"],
+    ["notify.risk", "Ngắt mạch, bot tự dừng, lỗi SL trên sàn", "", "bool"],
+    ["notify.health", "Mất kết nối sàn quá 5 phút", "", "bool"],
+    ["notify.daily", "Tổng kết ngày (00:00 UTC)", "", "bool"],
+    ["notify.signals", "Mọi case được nhận diện", "", "bool"],
+    ["notify.warnings", "Cảnh báo lặp lại (ví dụ mã không quét được)", "", "bool"],
   ],
   "form-strategy": [
     ["strategy.allow_short", "Cho phép SHORT", "", "bool"],
@@ -422,7 +484,7 @@ function fillForms(config) {
 const splitSymbols = (text) => text.toUpperCase().split(/[\s,;]+/).filter(Boolean);
 
 function readForms() {
-  const config = { watchlist: splitSymbols($("f-watchlist").value), scan_interval_sec: status?.config.scan_interval_sec ?? 20, risk: {}, strategy: {} };
+  const config = { watchlist: splitSymbols($("f-watchlist").value), scan_interval_sec: status?.config.scan_interval_sec ?? 20, risk: {}, strategy: {}, notify: {} };
   document.querySelectorAll("[data-path]").forEach((input) => {
     const [group, key] = input.dataset.path.split(".");
     config[group][key] = input.type === "checkbox" ? input.checked : Number(input.value);
@@ -543,6 +605,19 @@ $("btn-defaults").onclick = () => {
   $("settings-msg").textContent = "Đã điền giá trị mặc định. Bấm Lưu để áp dụng.";
 };
 $("btn-backtest").onclick = runBacktest;
+$("btn-telegram-test").onclick = async () => {
+  const message = $("telegram-msg");
+  message.className = "msg muted";
+  message.textContent = "Đang gửi…";
+  try {
+    const result = await api("/api/notify/test", {});
+    message.className = "msg up";
+    message.textContent = `✓ ${result.message}`;
+  } catch (error) {
+    message.className = "msg down";
+    message.textContent = `✕ ${error.message}`;
+  }
+};
 
 (async function init() {
   buildForms();

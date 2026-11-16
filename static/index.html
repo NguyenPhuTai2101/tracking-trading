@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
   <title>Trading Bot · Quản lý vốn</title>
-  <link rel="stylesheet" href="/static/style.css?v=4.1.0">
+  <link rel="stylesheet" href="/static/style.css?v=4.2.0">
 </head>
 <body>
 <header>
@@ -77,13 +77,22 @@
         <button data-days="90" aria-pressed="false">90 ngày</button>
         <button data-days="0" aria-pressed="false">Tất cả</button>
       </div>
-      <span class="muted" style="font-size:12px">Lãi/lỗ đã trừ phí taker ước tính, chưa gồm funding. Đường vốn lấy từ số dư thật của tài khoản.</span>
+      <span class="muted" style="font-size:12px">Lệnh đã đối soát dùng phí và funding thật từ sàn; lệnh có dấu ≈ còn dùng phí ước tính. Đường vốn lấy từ số dư thật.</span>
     </div>
     <div id="perf-note"></div>
     <div class="tiles" id="perf-tiles"></div>
     <div class="card">
       <h2>Đường vốn tài khoản (USDT)</h2>
       <div class="chart" id="perf-chart"></div>
+    </div>
+    <div class="card">
+      <h2>Chi phí chạy thật so với giả định của backtest</h2>
+      <div class="table-wrap" id="perf-execution"></div>
+    </div>
+    <div class="card">
+      <h2>Từng case so với kỳ vọng từ nghiên cứu</h2>
+      <div class="table-wrap" id="perf-expectation"></div>
+      <p class="muted" style="margin:10px 0 0;font-size:12px">Khoảng kỳ vọng = kỳ vọng nghiên cứu ± 2 sai số chuẩn cho đúng số lệnh đó. Nằm trong khoảng nghĩa là chưa thấy gì bất thường, không có nghĩa case đã được chứng minh.</p>
     </div>
     <div class="grid-2">
       <div class="card"><h2>Theo case</h2><div class="table-wrap" id="perf-setups"></div></div>
@@ -107,6 +116,15 @@
     </div>
     <div class="card"><h2>Tham số chung và case "Phá vỡ có lực"</h2><div class="form-grid" id="form-strategy"></div></div>
     <div class="card"><h2>Tham số case "Nhịp hồi trong xu hướng"</h2><div class="form-grid" id="form-pullback"></div></div>
+    <div class="card">
+      <h2>Thông báo Telegram</h2>
+      <p class="msg" id="telegram-status" style="margin:0 0 12px"></p>
+      <div class="form-grid" id="form-notify"></div>
+      <div class="actions">
+        <button class="btn" id="btn-telegram-test">Gửi tin thử</button>
+        <span class="msg" id="telegram-msg" role="status"></span>
+      </div>
+    </div>
     <div class="card">
       <h2>Danh mục quét</h2>
       <div class="field">
@@ -174,6 +192,6 @@
   </section>
 </main>
 
-<script src="/static/app.js?v=4.1.0"></script>
+<script src="/static/app.js?v=4.3.0"></script>
 </body>
 </html>

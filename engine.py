@@ -13,7 +13,12 @@ executes it and keeps the bot's books equal to the exchange:
   cancelled and re-created at the new level; while that happens the monitor loop enforces
   the stop itself.
 - Positions on the exchange that the bot does not know about block new entries.
+- Events worth knowing about without opening the app (trades, breakers, halts, the bot losing
+  the exchange, a daily summary) go to the notifier. Sending never blocks or fails the loop.
+- A closed trade is first booked with estimated fees. Shortly after, its fills are read back
+  from the exchange and the estimate is replaced by the real commission and funding.
 """
+import json
 import logging
 import os
 import threading
@@ -41,8 +46,28 @@ SYMBOL_PATTERN = r"^[A-Z0-9]{2,30}USDT$"
 ACCOUNT_REFRESH_SEC = 10
 EQUITY_SNAPSHOT_SEC = 300
 MIN_STOP_GAP = 0.0015      # an exchange stop closer than this to the mark price would trigger at once
+SETTLE_INTERVAL_SEC = 60
+SETTLE_DELAY_MS = 20_000              # give the exchange time to book the fills before reading them back
+SETTLE_WINDOW_MS = 3 * 86_400_000     # stop retrying after this long; the trade keeps its estimate
+USD_ASSETS = {"USDT", "USDC", "BUSD", "FDUSD", "BFUSD"}
+HEALTH_ALERT_SEC = 300                # the exchange unreachable for this long is worth a notification
+# Which notification switch each kind of log line belongs to. Levels not listed are never sent.
+NOTIFY_CATEGORY = {"SUCCESS": "trades", "RISK": "risk", "ERROR": "risk", "ALERT": "health", "DAILY": "daily",
+                   "SIGNAL": "signals", "CASE": "signals", "WARN": "warnings"}
 
 log = logging.getLogger(__name__)
+
+
+class NotifyConfig(BaseModel):
+    """What is sent to Telegram. The credentials themselves live in the environment, not here."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trades: bool = True        # position opened, partly closed, closed (with the result), bot started/resumed
+    risk: bool = True          # circuit breakers, drawdown halt, the bot stopping itself, exchange-stop failures
+    health: bool = True        # the exchange unreachable for 5 minutes, and when it is back
+    daily: bool = True         # one summary at 00:00 UTC
+    signals: bool = False      # every recognised case, traded or only observed
+    warnings: bool = False     # recurring problems such as a symbol that cannot be scanned
 
 
 class BotConfig(BaseModel):
@@ -52,6 +77,7 @@ class BotConfig(BaseModel):
     scan_interval_sec: int = Field(20, ge=5, le=600)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyParams = Field(default_factory=StrategyParams)
+    notify: NotifyConfig = Field(default_factory=NotifyConfig)
 
     @field_validator("watchlist")
     @classmethod
@@ -72,9 +98,12 @@ def _sign(direction):
 
 
 class TradingEngine:
-    def __init__(self, client, journal, autoload=True):
+    def __init__(self, client, journal, autoload=True, notifier=None):
         self.client = client
         self.journal = journal
+        self.notifier = notifier
+        self.unhealthy_since: Optional[float] = None
+        self.health_alerted = False
         self.lock = threading.RLock()
         self.order_lock = threading.RLock()
         self.stop_event = threading.Event()
@@ -114,6 +143,7 @@ class TradingEngine:
         self.regime_cache: Dict[str, Any] = {}
         self.scan_board: Dict[str, Dict[str, Any]] = {}
         self.warned: Dict[str, float] = {}
+        self.next_settle_at = 0.0
         if autoload:
             self.load_state()
 
@@ -125,6 +155,25 @@ class TradingEngine:
             self.journal.add_event(level, message)
         except Exception as exc:     # the log must never take the bot down
             log.error("Không ghi được nhật ký: %s", exc)
+        category = NOTIFY_CATEGORY.get(level)
+        if self.notifier and category and getattr(self.config.notify, category):
+            self.notifier.send(message)
+
+    def _watch_health(self, healthy: bool, detail: str = ""):
+        """Tell the user once when the bot has been blind for a while, and once when it sees again."""
+        if healthy:
+            if self.health_alerted:
+                self.add_log("ALERT", "✅ Bot đã kết nối lại với sàn và giám sát bình thường.")
+            self.unhealthy_since, self.health_alerted = None, False
+            return
+        now = time.monotonic()
+        self.unhealthy_since = self.unhealthy_since or now
+        if not self.health_alerted and now - self.unhealthy_since >= HEALTH_ALERT_SEC:
+            self.health_alerted = True
+            open_positions = len(self.positions)
+            self.add_log("ALERT", f"⚠ Bot không đọc được sàn hơn {HEALTH_ALERT_SEC // 60} phút{': ' + detail if detail else ''}. "
+                                  f"Đang có {open_positions} vị thế; SL đã đặt trên sàn vẫn có hiệu lực, "
+                                  "nhưng trailing và chốt lời đang tạm ngừng.")
 
     def _warn(self, key: str, message: str, every: float = 300):
         """Log a recurring problem at most once per `every` seconds."""
@@ -187,6 +236,7 @@ class TradingEngine:
                 # Positions saved before setups existed were all trend pullbacks on 1h.
                 pos.setdefault("setup", "TREND_PULLBACK")
                 pos.setdefault("interval", SETUPS[pos["setup"]].interval)
+                pos.setdefault("order_ids", [])
                 pos["plan"].setdefault("exit", strategy.trend_exit(self.config.strategy))
                 numbers = [float(pos["quantity"]), float(pos["entry_price"]), float(pos["plan"]["stop"])]
                 if (pos["symbol"] != sym or pos["direction"] not in ("LONG", "SHORT")
@@ -355,6 +405,8 @@ class TradingEngine:
         for thread in (self.thread, self.scan_thread):
             if thread:
                 thread.join()
+        if self.notifier:
+            self.notifier.close()
         self.release_process_lock()
 
     # ------------------------------------------------------------------ loops
@@ -369,6 +421,7 @@ class TradingEngine:
                 self.last_error = str(exc)
                 self.entries_enabled = False
                 self._warn("tick", f"Lỗi giám sát: {exc}", every=60)
+                self._watch_health(False, str(exc))
             self.stop_event.wait(2)
 
     def _scan_loop(self):
@@ -388,7 +441,13 @@ class TradingEngine:
         self._reconcile_protections()
         for sym in list(self.positions):
             self._ensure_protection(sym)
-        self._refresh_account()
+        account = self._refresh_account()
+        if self.client.has_credentials:
+            self._watch_health(account is not None, "không đọc được tài khoản Futures")
+        try:
+            self._settle_trades()
+        except Exception as exc:        # bookkeeping must never interrupt position monitoring
+            self._warn("settle", f"Chưa đối soát được phí/funding với sàn: {exc}")
         with self.lock:
             symbols = list(self.positions)
             needs_check = self.is_running or bool(symbols)
@@ -459,9 +518,74 @@ class TradingEngine:
                 log.error("Không ghi được đường vốn: %s", exc)
         for message in events:
             self.add_log("RISK", f"⏸ {message}")
+        if before["day"] and before["day"] != self.risk_state["day"]:
+            self._daily_summary(before, equity)
         if halted and (self.is_running or self.resume_pending):
             self._halt(self.risk_state["halt_reason"])
         return account
+
+    def _daily_summary(self, yesterday, equity):
+        """One message when the UTC day rolls over: what the day did and what is still open."""
+        day_start = datetime.strptime(yesterday["day"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        start_ms = int(day_start.timestamp() * 1000)
+        trades = [t for t in self.journal.trades(start_ms) if t["exit_time"] < start_ms + 86_400_000]
+        base = yesterday.get("day_start_equity") or equity
+        change = (equity / base - 1) * 100 if base else 0.0
+        with self.lock:
+            open_lines = [f"  {sym} {p['direction']} {p.get('r_now', 0):+.2f}R" for sym, p in self.positions.items()]
+            state = "đang chạy" if self.is_running else "đang dừng"
+        lines = [f"📊 Tổng kết {yesterday['day']} (UTC)",
+                 f"Vốn: {equity:,.2f} USDT ({change:+.2f}% trong ngày)",
+                 f"Lệnh đã đóng: {len(trades)}, ròng {sum(t['net_pnl'] for t in trades):+.2f} USDT"
+                 + (f" ({sum(t['r_multiple'] for t in trades):+.2f}R)" if trades else ""),
+                 f"Vị thế đang mở: {len(open_lines)}" + ("" if not open_lines else "\n" + "\n".join(open_lines)),
+                 f"Bot {state}."]
+        self.add_log("DAILY", "\n".join(lines))
+
+    def _settle_trades(self):
+        """Replace the estimated fees of recently closed trades with what the exchange booked."""
+        now = time.monotonic()
+        if not self.client.has_credentials or now < self.next_settle_at:
+            return
+        self.next_settle_at = now + SETTLE_INTERVAL_SEC
+        now_ms = _now_ms()
+        for trade in self.journal.unsettled_trades(now_ms - SETTLE_WINDOW_MS):
+            if now_ms - trade["exit_time"] < SETTLE_DELAY_MS:
+                continue
+            actual = self._actual_result(trade)
+            if not actual:
+                continue                    # not booked yet or lookup failed: try again next round
+            self.journal.settle_trade(trade["position_id"], **actual)
+            self.add_log("INFO", f"Đối soát {trade['symbol']}: phí {'thật' if actual['settled'] == 1 else 'ước tính'} "
+                                 f"{actual['fees']:.4f}, funding {actual['funding']:+.4f}, ròng {actual['net_pnl']:+.2f} USDT "
+                                 f"({actual['r_multiple']:+.2f}R; ước tính ban đầu {trade['net_pnl']:+.2f}).")
+
+    def _actual_result(self, trade):
+        """What the exchange booked for a closed trade, or None while that cannot be established."""
+        order_ids = json.loads(trade["order_ids"] or "[]")
+        if not order_ids:
+            return None
+        fills = []
+        for order_id in order_ids:
+            rows = self.client.get_futures_order_fills(trade["symbol"], order_id)
+            if rows is None:
+                return None
+            fills += rows
+        # Every unit was bought once and sold once; anything else means fills are still missing.
+        if not isclose(sum(float(f["qty"]) for f in fills), 2 * trade["quantity"], rel_tol=1e-6):
+            return None
+        payments = self.client.get_futures_funding(trade["symbol"], trade["entry_time"], trade["exit_time"])
+        if payments is None:
+            return None
+        in_usd = all(f.get("commissionAsset") in USD_ASSETS for f in fills)
+        fees = sum(float(f["commission"]) for f in fills) if in_usd else trade["fees"]
+        gross = sum(float(f["realizedPnl"]) for f in fills)
+        funding = sum(float(p["income"]) for p in payments)
+        net = gross - fees + funding
+        return {"gross_pnl": round(gross, 8), "fees": round(fees, 8), "funding": round(funding, 8),
+                "net_pnl": round(net, 8),
+                "r_multiple": round(net / trade["risk_usdt"], 4) if trade["risk_usdt"] > 0 else 0.0,
+                "settled": 1 if in_usd else 2}
 
     # ------------------------------------------------------------------ scanning & entry
 
@@ -915,13 +1039,13 @@ class TradingEngine:
         with self.lock:
             if delta_qty > 0:
                 if order["kind"] == "entry":
-                    self._record_entry(sym, order, float(delta_qty), float(delta_quote))
+                    self._record_entry(sym, order, float(delta_qty), float(delta_quote), data.get("orderId"))
                 else:
                     pos = self.positions.get(sym)
                     if not pos or (float(delta_qty) > pos["quantity"]
                                    and not isclose(float(delta_qty), pos["quantity"])):
                         return {"success": False, "pending": True, "error": "Khối lượng khớp khác dữ liệu vị thế."}
-                    self._record_exit(sym, pos, order, float(delta_qty), float(delta_quote))
+                    self._record_exit(sym, pos, order, float(delta_qty), float(delta_quote), data.get("orderId"))
                 order["applied_qty"] = str(qty)
                 order["applied_quote"] = str(quote)
             order["exchange_status"] = status
@@ -941,7 +1065,13 @@ class TradingEngine:
             return {"success": False, "error": f"Lệnh {status} không khớp."}
         return {"success": True, "remaining_quantity": remaining if order["kind"] == "close" else 0}
 
-    def _record_entry(self, sym, order, qty, quote):
+    @staticmethod
+    def _note_order(pos, order_id):
+        """Remember which exchange orders built and closed the position, to read their fills back later."""
+        if order_id is not None and order_id not in pos["order_ids"]:
+            pos["order_ids"].append(order_id)
+
+    def _record_entry(self, sym, order, qty, quote, order_id=None):
         existing = self.positions.get(sym)
         if existing:                                   # a further partial fill of the same entry order
             qty += existing["quantity"]
@@ -952,7 +1082,9 @@ class TradingEngine:
             "leverage": order["leverage"], "entry_time_ms": _now_ms(), "last_candle_ms": 0,
             "realized_pnl": 0.0, "exit_notional": 0.0, "reason": order["reason"], "regime": order.get("regime"),
             "setup": order["setup"], "interval": order["interval"],
+            "order_ids": [], "signal_price": order.get("signal_price"),
         }
+        self._note_order(pos, order_id)
         try:
             plan = strategy.new_plan(order["direction"], price, order["stop_price"], order["exit"])
         except ValueError:
@@ -976,7 +1108,8 @@ class TradingEngine:
         self.add_log("SUCCESS", f"✅ Mở {order['direction']} {sym} ({SETUPS[order['setup']].label}): {qty:g} @ {price:g}, SL {plan['stop']:g}, "
                                 f"1R = {pos['risk_usdt']:.2f} USDT")
 
-    def _record_exit(self, sym, pos, order, qty, quote):
+    def _record_exit(self, sym, pos, order, qty, quote, order_id=None):
+        self._note_order(pos, order_id)
         price = quote / qty
         s = _sign(pos["direction"])
         pnl = s * (price - pos["entry_price"]) * qty
@@ -1008,6 +1141,8 @@ class TradingEngine:
             "fees": round(fees, 8), "net_pnl": round(net, 8), "risk_usdt": round(pos["risk_usdt"], 8),
             "r_multiple": round(net / pos["risk_usdt"], 4) if pos["risk_usdt"] > 0 else 0.0,
             "reason": reason, "bars": pos["plan"]["bars"], "setup": pos["setup"],
+            "funding": 0.0, "settled": 0, "order_ids": json.dumps(pos["order_ids"]),
+            "signal_price": pos.get("signal_price"),
         })
         tripped = risk.record_trade(self.risk_state, net, cfg)
         self.last_exit_ms[sym] = now
@@ -1236,5 +1371,5 @@ class TradingEngine:
                 "scan_board": [{**self.scan_board[s], "cases": [self.scan_board[s]["cases"][k] for k in SETUPS
                                                               if k in self.scan_board[s]["cases"]]}
                                for s in self.config.watchlist if s in self.scan_board],
-                "pnl_basis": "net_of_estimated_fees_before_funding",
+                "pnl_basis": "exchange_fees_and_funding_once_settled_else_estimated_fees",
             }

@@ -2,6 +2,10 @@
 
 State and the trades it closes are written in one transaction, so a crash can never
 leave a trade recorded twice or a closed position still open.
+
+A trade is first recorded with estimated fees (settled = 0). Once the exchange has booked
+its fills, the engine replaces the estimate with the real commission and funding
+(settled = 1; 2 when the commission was paid in a non-USD asset and stays an estimate).
 """
 import json
 import sqlite3
@@ -11,7 +15,13 @@ from typing import Dict, List, Optional
 
 TRADE_COLUMNS = ("position_id", "symbol", "direction", "entry_time", "exit_time", "entry_price",
                  "exit_price", "quantity", "gross_pnl", "fees", "net_pnl", "risk_usdt", "r_multiple",
-                 "reason", "bars", "setup")
+                 "reason", "bars", "setup", "funding", "settled", "order_ids", "signal_price")
+# Columns added after the first release, with the value older rows and callers get.
+ADDED_COLUMNS = {"setup": ("TEXT NOT NULL DEFAULT 'TREND_PULLBACK'", "TREND_PULLBACK"),
+                 "funding": ("REAL NOT NULL DEFAULT 0", 0.0),
+                 "settled": ("INTEGER NOT NULL DEFAULT 0", 0),
+                 "order_ids": ("TEXT NOT NULL DEFAULT '[]'", "[]"),
+                 "signal_price": ("REAL", None)}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -20,8 +30,7 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_time INTEGER NOT NULL, exit_time INTEGER NOT NULL,
     entry_price REAL NOT NULL, exit_price REAL NOT NULL, quantity REAL NOT NULL,
     gross_pnl REAL NOT NULL, fees REAL NOT NULL, net_pnl REAL NOT NULL,
-    risk_usdt REAL NOT NULL, r_multiple REAL NOT NULL, reason TEXT NOT NULL, bars INTEGER NOT NULL,
-    setup TEXT NOT NULL DEFAULT 'TREND_PULLBACK');
+    risk_usdt REAL NOT NULL, r_multiple REAL NOT NULL, reason TEXT NOT NULL, bars INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS trades_exit ON trades (exit_time);
 CREATE TABLE IF NOT EXISTS equity (ts INTEGER PRIMARY KEY, equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
@@ -38,9 +47,10 @@ class Journal:
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
-        if "setup" not in {row["name"] for row in self.db.execute("PRAGMA table_info(trades)")}:
-            # Databases created before setups existed: every trade then was a trend pullback.
-            self.db.execute("ALTER TABLE trades ADD COLUMN setup TEXT NOT NULL DEFAULT 'TREND_PULLBACK'")
+        existing = {row["name"] for row in self.db.execute("PRAGMA table_info(trades)")}
+        for column, (definition, _) in ADDED_COLUMNS.items():
+            if column not in existing:
+                self.db.execute(f"ALTER TABLE trades ADD COLUMN {column} {definition}")
 
     def close(self):
         with self.lock:
@@ -64,7 +74,8 @@ class Journal:
                                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (payload,))
                 for trade in trades:
                     self.db.execute(f"INSERT OR REPLACE INTO trades ({', '.join(TRADE_COLUMNS)}) VALUES ({marks})",
-                                    [trade[c] for c in TRADE_COLUMNS])
+                                    [trade[c] if c in trade or c not in ADDED_COLUMNS else ADDED_COLUMNS[c][1]
+                                     for c in TRADE_COLUMNS])
                 self.db.execute("COMMIT")
             except Exception:
                 self.db.execute("ROLLBACK")
@@ -74,6 +85,19 @@ class Journal:
         with self.lock:
             rows = self.db.execute("SELECT * FROM trades WHERE exit_time >= ? ORDER BY exit_time", (since_ms,)).fetchall()
         return [dict(r) for r in rows]
+
+    def unsettled_trades(self, since_ms: int) -> List[Dict]:
+        """Trades still carrying estimated fees, newest exits last."""
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM trades WHERE settled = 0 AND exit_time >= ? ORDER BY exit_time",
+                                   (since_ms,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def settle_trade(self, position_id: str, *, gross_pnl, fees, funding, net_pnl, r_multiple, settled):
+        with self.lock:
+            self.db.execute("UPDATE trades SET gross_pnl = ?, fees = ?, funding = ?, net_pnl = ?, r_multiple = ?, "
+                            "settled = ? WHERE position_id = ?",
+                            (gross_pnl, fees, funding, net_pnl, r_multiple, settled, position_id))
 
     # ---------------- equity ----------------
 

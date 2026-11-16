@@ -52,22 +52,24 @@ class Setup:
     regime_interval: str    # candles the trend regime is read on
     case: str               # the situation, in one line
     evidence: str           # what the research found
+    expected_r: float = 0.0     # research: mean R per trade, net of costs
+    r_sd: float = 1.0           # research: standard deviation of R per trade
 
 
 SETUPS: Dict[str, Setup] = {s.key: s for s in (
     Setup("THRUST_BREAKOUT", "Phá vỡ có lực", "4h", "1d",
           "Nến 4h đóng vượt đỉnh/đáy 20 nến và vượt dải Bollinger, không ngược xu hướng ngày.",
           "Dương ở cả 4 mẫu dữ liệu độc lập (+0,07 đến +0,25R mỗi lệnh; t = 2,7 trên dữ liệu chưa từng dùng). "
-          "Lãi dồn vào những năm thị trường có xu hướng mạnh; các năm khác gần hòa vốn."),
+          "Lãi dồn vào những năm thị trường có xu hướng mạnh; các năm khác gần hòa vốn.", 0.10, 2.1),
     Setup("TREND_PULLBACK", "Nhịp hồi trong xu hướng", "1h", "4h",
           "Xu hướng 4h rõ, giá hồi về EMA20 khung 1h rồi có nến xác nhận.",
-          "Không có lợi thế: −0,055R trên train, khoảng 0R ngoài mẫu."),
+          "Không có lợi thế: −0,055R trên train, khoảng 0R ngoài mẫu.", -0.04, 1.2),
     Setup("RANGE_REVERSION", "Đảo chiều trong vùng đi ngang", "1h", "4h",
           "Thị trường đi ngang, giá đóng ngoài dải Bollinger rồi đóng trở lại bên trong.",
-          "Âm trên train (−0,22R, t = −4,9), khoảng 0R trên giai đoạn kiểm định. Chỉ nên quan sát."),
+          "Âm trên train (−0,22R, t = −4,9), khoảng 0R trên giai đoạn kiểm định. Chỉ nên quan sát.", -0.16, 1.1),
     Setup("FAILED_BREAKOUT", "Phá vỡ giả", "1h", "4h",
           "Giá quét qua đỉnh/đáy 48 nến rồi đóng ngược trở lại trong vùng.",
-          "Âm trên train (−0,13R, t = −4,0), khoảng 0R trên giai đoạn kiểm định. Chỉ nên quan sát."),
+          "Âm trên train (−0,13R, t = −4,0), khoảng 0R trên giai đoạn kiểm định. Chỉ nên quan sát.", -0.10, 1.2),
 )}
 DEFAULT_SETUPS = ["THRUST_BREAKOUT"]
 

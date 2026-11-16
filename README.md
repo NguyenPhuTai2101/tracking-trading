@@ -29,6 +29,7 @@ backtest.py dùng chung strategy.py và risk.py      journal.py (SQLite) ─► 
 | `backtest.py` | Mô phỏng danh mục với đúng `strategy.py` + `risk.py`, có phí, trượt giá, funding |
 | `research.py` | Nghiên cứu tín hiệu với ba tập dữ liệu tách rời (train / kiểm định / holdout) |
 | `journal.py` | SQLite `trading.db`: trạng thái bot, lệnh đã đóng, đường vốn, nhật ký |
+| `notifier.py` | Gửi thông báo Telegram qua hàng đợi riêng, không làm chậm vòng giao dịch |
 | `binance_client.py` | REST Binance Demo: lệnh, lệnh điều kiện (algo), vị thế, nến |
 | `main.py`, `static/` | API FastAPI và giao diện một trang |
 
@@ -91,11 +92,43 @@ BINANCE_SECRET_KEY=...
   biến này thì ứng dụng trả 503 thay vì mở công khai.
 - Tài khoản Futures phải ở chế độ **One-way**. Bot không tự đổi chế độ.
 
+### Thông báo Telegram
+
+1. Trong Telegram, nhắn `/newbot` cho **@BotFather** để tạo bot và nhận token.
+2. Mở cuộc trò chuyện với bot vừa tạo và gửi cho nó một tin bất kỳ (bot không thể nhắn trước cho bạn).
+3. Lấy chat id: mở `https://api.telegram.org/bot<TOKEN>/getUpdates` trên trình duyệt và tìm `"chat":{"id":...}`.
+4. Thêm vào `.env` (hoặc biến môi trường trên Railway) rồi khởi động lại ứng dụng:
+
+```
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+5. Vào tab Thiết lập, mục "Thông báo Telegram", bấm **Gửi tin thử**. Nếu sai token hoặc chat id, lý do Telegram
+   trả về sẽ hiện ngay cạnh nút.
+
+Bot gửi (bật/tắt từng loại ở tab Thiết lập):
+
+| Loại | Mặc định | Nội dung |
+|---|---|---|
+| Mở / đóng lệnh | Bật | Mở vị thế (case, khối lượng, SL, 1R), chốt một phần, đóng lệnh kèm lãi/lỗ và R, bot bắt đầu hoặc tự chạy lại |
+| Rủi ro | Bật | Ngắt mạch ngày/tuần/chuỗi thua, dừng do drawdown, bot tự dừng, lỗi đặt SL trên sàn |
+| Sức khỏe | Bật | Không đọc được sàn quá 5 phút (một tin), và khi kết nối lại (một tin) |
+| Tổng kết ngày | Bật | Lúc 00:00 UTC: vốn, % trong ngày, số lệnh đã đóng, vị thế đang mở |
+| Mọi case được nhận diện | Tắt | Cả case chỉ quan sát; khá nhiều tin |
+| Cảnh báo lặp lại | Tắt | Ví dụ một mã không quét được |
+
+Token chỉ nằm trong biến môi trường: không ghi vào `trading.db`, không trả qua API, không xuất hiện trong thông báo
+lỗi. Tin giống hệt nhau không gửi lại trong 10 phút; gửi lỗi thì thử lại 3 lần rồi bỏ; hàng đợi tối đa 200 tin.
+Telegram chậm hoặc không truy cập được không ảnh hưởng tới việc giao dịch.
+
 ### Bốn tab
 
 - **Tổng quan:** vốn, lãi/lỗ ngày và tuần, drawdown, mức sử dụng từng giới hạn rủi ro, vị thế đang mở, bảng
   quét case (mỗi mã: từng case đang ở bước nào, ● được vào lệnh, ○ chỉ quan sát), nhật ký.
-- **Hiệu suất:** lệnh đã đóng tính theo R và USDT sau phí ước tính, tách theo case; đường vốn lấy từ số dư thật.
+- **Hiệu suất:** lệnh đã đóng tính theo R và USDT với **phí và funding thật từ sàn**, tách theo case; chi phí chạy
+  thật đặt cạnh giả định của backtest; kết quả từng case đặt cạnh khoảng kỳ vọng từ nghiên cứu; đường vốn lấy
+  từ số dư thật.
 - **Thiết lập:** bật/tắt từng case (kèm bằng chứng nghiên cứu), tham số vốn, ngắt mạch, danh mục. Phải dừng
   bot trước khi lưu.
 - **Backtest:** chạy thử các giá trị đang hiện ở tab Thiết lập (kể cả chưa lưu), có bảng theo case.
@@ -111,6 +144,10 @@ BINANCE_SECRET_KEY=...
 - Đặt SL trên sàn thất bại: đóng vị thế đó. Thất bại 2 lần trong 1 giờ: bot dừng.
 - Vị thế trên sàn mà bot không biết sẽ **chặn mở lệnh mới**. Bảng điều khiển có nút đóng riêng các vị thế đó;
   "Đóng tất cả" chỉ đóng vị thế của bot.
+- **Đối soát lãi/lỗ với sàn.** Khi đóng, lệnh được ghi ngay với phí ước tính (dấu ≈). Khoảng một phút sau bot
+  đọc lại các lần khớp của đúng những lệnh đã mở và đóng vị thế đó (`/fapi/v1/userTrades`) cùng các khoản
+  funding trong thời gian giữ lệnh (`/fapi/v1/income`), rồi thay bằng phí, lãi/lỗ và funding thật. Chưa đủ dữ
+  liệu thì thử lại mỗi phút, tối đa 3 ngày. Việc này chỉ sửa sổ sách, không ảnh hưởng lệnh đang mở.
 - "Dừng mở lệnh" vẫn tiếp tục quản lý SL của vị thế đang mở. Bot đang chạy sẽ tự chạy lại sau khi máy chủ
   khởi động lại (thử tối đa 10 lần, mỗi 30 giây).
 
@@ -229,8 +266,17 @@ STOP_MARKET reduce-only ở xa giá để kiểm tra vòng đời lệnh SL; kh�
 
 ## Giới hạn đã biết
 
-- Lãi/lỗ từng lệnh dùng **phí ước tính** (taker 0,05% mỗi chiều) và chưa gồm funding. Đường vốn thì lấy từ số
-  dư thật nên đã gồm cả hai.
+- Lãi/lỗ từng lệnh chỉ là **ước tính** (phí taker 0,05% mỗi chiều, chưa có funding) cho tới khi được đối soát
+  với sàn. Nếu phí bị thu bằng tài sản khác USD (ví dụ BNB), phí giữ nguyên ước tính còn lãi/lỗ và funding vẫn
+  lấy số thật. Các ngắt mạch không phụ thuộc vào những con số này vì chúng tính theo vốn thật của tài khoản.
+- Luồng đối soát đã được kiểm thử với sàn giả lập và hai endpoint đã xác nhận có trên Binance Demo, nhưng
+  **chưa chạy với khóa thật**. Funding được gán cho lệnh theo mã và khoảng thời gian giữ lệnh, đúng khi mỗi mã
+  chỉ có vị thế của bot (bot vốn chặn mở lệnh nếu thấy vị thế ngoài bot).
+- Thông báo Telegram đã được kiểm thử với Telegram giả lập; **chưa có tin nào được gửi tới Telegram thật**.
+  Bước "Gửi tin thử" ở trên là cách xác nhận. Nếu ứng dụng tắt hẳn thì không có tin nào được gửi, kể cả cảnh
+  báo sức khỏe: muốn biết máy chủ chết cần một dịch vụ giám sát bên ngoài gọi `/healthz`.
+- Bảng "so với kỳ vọng từ nghiên cứu" có khoảng rất rộng khi ít lệnh (với 30 lệnh của case phá vỡ: ±0,77R).
+  Nó dùng để phát hiện kết quả lệch hẳn (thường do khớp lệnh hoặc chi phí), không phải để chứng minh case.
 - Luồng chốt một phần gửi lệnh reduce-only khi lệnh SL cũ còn trên sàn, rồi mới thay SL. Luồng này đã được
   kiểm thử với sàn giả lập, **chưa được xác nhận trên Binance Demo thật**; nếu sàn từ chối, bot bỏ qua bước
   chốt một phần và tiếp tục trailing. Case mặc định (phá vỡ có lực) không dùng chốt một phần.

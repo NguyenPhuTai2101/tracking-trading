@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -48,6 +49,29 @@ class ApiTests(unittest.TestCase):
         self.client.post("/api/bot/stop")
         self.assertFalse(self.client.get("/api/status").json()["is_running"])
 
+    def test_telegram_status_and_test_message(self):
+        self.assertEqual(self.client.get("/api/status").json()["telegram"], {"configured": False})
+        self.assertEqual(self.client.post("/api/notify/test").status_code, 400)
+        sent = []
+
+        class Reply:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True}
+
+        from notifier import TelegramNotifier
+        self.engine.notifier = TelegramNotifier("1:token", "42", post=lambda url, json=None, timeout=None: sent.append(json) or Reply())
+        response = self.client.post("/api/notify/test")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual((len(sent), sent[0]["chat_id"]), (1, "42"))
+        status = self.client.get("/api/status").json()["telegram"]
+        self.assertTrue(status["configured"])
+        self.assertNotIn("token", json.dumps(self.client.get("/api/status").json()))      # the token never leaves the server
+        config = self.client.get("/api/config").json()["config"]
+        self.assertEqual(config["notify"], {"trades": True, "risk": True, "health": True, "daily": True,
+                                            "signals": False, "warnings": False})
+
     def test_start_refusal_is_a_400_with_the_reason(self):
         self.exchange.position["LINKUSDT"] = 5.0
         response = self.client.post("/api/bot/start")
@@ -89,6 +113,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(data["equity_curve"]), 2)
         self.assertEqual(data["trades"][0]["reason"], "TRAILING_STOP")
         self.assertEqual(data["by_setup"][0]["setup"], "THRUST_BREAKOUT")
+        self.assertEqual((data["summary"]["estimated_trades"], data["execution"]["settled_trades"]), (1, 0))
+        self.assertEqual(data["execution"]["assumed_fee_rate_pct"], 0.05)
+        self.assertEqual(data["expectation"][0]["verdict"], "TOO_FEW")
 
     def test_backtest_endpoint_uses_saved_config_and_rejects_bad_input(self):
         candles = candles_from_closes([100.0] * 400, step=4 * 3600)

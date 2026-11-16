@@ -43,6 +43,12 @@ class FakeExchange:
         self.klines = {}          # (symbol, interval) -> candles
         self.sent = []            # every order submission, in order
         self.order_result = None  # set to override the next create_futures_order response
+        self.fee_rate = 0.0004    # what this exchange really charges (the bot assumes 0.05%)
+        self.fee_asset = "USDT"
+        self.entry_price = {}     # symbol -> average entry of the open position
+        self.fills = {}           # exchange order id -> executions, as /fapi/v1/userTrades returns them
+        self.funding = []         # {"symbol", "income", "time"} rows, as /fapi/v1/income returns them
+        self.history_ready = True
         self.on_order = None      # hook called just before an order is accepted
 
     def _get_timestamp(self):
@@ -87,15 +93,38 @@ class FakeExchange:
                           "id": client_order_id})
         if self.on_order:
             self.on_order()
-        signed = quantity if side == "BUY" else -quantity
-        self.position[symbol] = round(self.position.get(symbol, 0.0) + signed, 6)
+        order_id = len(self.sent)
+        self._book(symbol, side, quantity, self.price[symbol], order_id)
         record = {"status": "FILLED", "executedQty": str(quantity), "cumQuote": str(quantity * self.price[symbol]),
-                  "orderId": len(self.sent)}
+                  "orderId": order_id}
         self.orders[client_order_id] = record
         if self.order_result is not None:
             result, self.order_result = self.order_result, None
             return result
         return {"success": True, "data": record, "client_order_id": client_order_id}
+
+    def _book(self, symbol, side, quantity, price, order_id):
+        """Apply a fill to the position and record it the way the exchange's trade history does."""
+        signed = quantity if side == "BUY" else -quantity
+        before = self.position.get(symbol, 0.0)
+        realized = 0.0
+        if before and before * signed < 0:                      # reducing: PnL against the entry price
+            realized = (price - self.entry_price.get(symbol, price)) * quantity * (1 if before > 0 else -1)
+        else:
+            self.entry_price[symbol] = price
+        self.position[symbol] = round(before + signed, 6)
+        self.fills.setdefault(order_id, []).append({
+            "symbol": symbol, "orderId": order_id, "side": side, "price": str(price), "qty": str(quantity),
+            "realizedPnl": str(realized), "commission": str(quantity * price * self.fee_rate),
+            "commissionAsset": self.fee_asset, "time": int(time.time() * 1000)})
+
+    def get_futures_order_fills(self, symbol, order_id):
+        return list(self.fills.get(order_id, [])) if self.history_ready else None
+
+    def get_futures_funding(self, symbol, start_ms, end_ms):
+        if not self.history_ready:
+            return None
+        return [row for row in self.funding if row["symbol"] == symbol and start_ms <= row["time"] <= end_ms]
 
     def query_order(self, market, symbol, client_order_id=None, order_id=None):
         record = self.orders.get(client_order_id) or self.orders.get(f"exchange:{order_id}")
@@ -125,8 +154,7 @@ class FakeExchange:
         """The exchange fires a stop while the bot is not looking."""
         stop = self.stops[client_algo_id]
         quantity = float(stop["quantity"])
-        self.position[stop["symbol"]] = round(
-            self.position[stop["symbol"]] + (-quantity if stop["side"] == "SELL" else quantity), 6)
+        self._book(stop["symbol"], stop["side"], quantity, fill_price, 777)
         stop.update(algoStatus="FINISHED", actualOrderId="777")
         self.orders["exchange:777"] = {"status": "FILLED", "executedQty": str(quantity),
                                        "cumQuote": str(quantity * fill_price), "orderId": 777}

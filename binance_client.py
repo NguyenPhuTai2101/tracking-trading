@@ -691,4 +691,37 @@ class BinanceDemoClient:
             print(f"[BinanceClient] Error get_futures_trades: {e}")
             return []
 
+    def get_futures_order_fills(self, symbol: str, order_id) -> Optional[List[Dict[str, Any]]]:
+        """Executions of one order, each with the commission the exchange charged and the PnL it
+        realised. None means the lookup failed (an empty list means no fills)."""
+        try:
+            query = self._sign_params({"symbol": symbol.upper(), "orderId": order_id, "limit": 1000})
+            res = self._request("GET", f"{self.futures_url}/fapi/v1/userTrades?{query}",
+                                headers=self._get_headers(), timeout=10)
+            if res.status_code == 200:
+                return res.json()
+        except (requests.RequestException, RuntimeError, ValueError):
+            pass
+        return None
+
+    def get_futures_funding(self, symbol: str, start_ms: int, end_ms: int) -> Optional[List[Dict[str, Any]]]:
+        """Funding payments booked for a symbol in [start_ms, end_ms]. None means the lookup failed."""
+        rows, cursor = [], start_ms
+        try:
+            while True:
+                query = self._sign_params({"symbol": symbol.upper(), "incomeType": "FUNDING_FEE",
+                                           "startTime": cursor, "endTime": end_ms, "limit": 1000})
+                res = self._request("GET", f"{self.futures_url}/fapi/v1/income?{query}",
+                                    headers=self._get_headers(), timeout=10)
+                if res.status_code != 200:
+                    return None
+                page = res.json()
+                rows += page
+                if len(page) < 1000:
+                    return rows
+                cursor = int(page[-1]["time"]) + 1
+        except (requests.RequestException, RuntimeError, ValueError, KeyError):
+            return None
+
+
 binance_client = BinanceDemoClient()

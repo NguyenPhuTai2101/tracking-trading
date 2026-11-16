@@ -4,6 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+import engine as engine_module
 import strategy
 from engine import BotConfig, TradingEngine
 from journal import Journal
@@ -203,6 +204,72 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.engine.update_config(BotConfig(risk=RiskConfig(leverage=3)))
 
+    # ---------------- settling against the exchange ----------------
+
+    def settle(self):
+        self.engine.next_settle_at = 0.0
+        with patch.object(engine_module, "SETTLE_DELAY_MS", 0):
+            self.engine._settle_trades()
+        return self.trades()[0]
+
+    def stopped_out_trade(self):
+        self.enter()
+        self.exchange.price[SYM] = 97.9
+        self.engine._tick()
+        (trade,) = self.trades()
+        return trade
+
+    def test_closed_trade_starts_estimated_then_takes_real_fees_and_funding(self):
+        estimate = self.stopped_out_trade()
+        self.assertEqual(estimate["settled"], 0)
+        self.assertAlmostEqual(estimate["fees"], QTY * (100 + 97.9) * 0.0005, places=6)     # assumed 0.05% a side
+        self.assertEqual(estimate["signal_price"], 100.0)
+        self.exchange.funding = [
+            {"symbol": SYM, "income": "-0.21", "time": estimate["entry_time"] + 1},
+            {"symbol": SYM, "income": "-9.99", "time": estimate["entry_time"] - 60_000},      # before the trade
+            {"symbol": "SOLUSDT", "income": "-5", "time": estimate["entry_time"] + 1}]        # another symbol
+        trade = self.settle()
+        self.assertEqual(trade["settled"], 1)
+        self.assertAlmostEqual(trade["fees"], QTY * (100 + 97.9) * 0.0004, places=6)        # what the exchange charged
+        self.assertAlmostEqual(trade["funding"], -0.21)
+        self.assertAlmostEqual(trade["gross_pnl"], -2.1 * QTY, places=6)
+        self.assertAlmostEqual(trade["net_pnl"], trade["gross_pnl"] - trade["fees"] - 0.21, places=6)
+        self.assertAlmostEqual(trade["r_multiple"], trade["net_pnl"] / trade["risk_usdt"], places=3)
+        self.assertNotEqual(trade["net_pnl"], estimate["net_pnl"])
+        self.assertEqual(self.engine.journal.unsettled_trades(0), [])
+
+    def test_trade_keeps_its_estimate_until_the_exchange_has_every_fill(self):
+        estimate = self.stopped_out_trade()
+        self.exchange.history_ready = False                         # lookup fails
+        self.assertEqual(self.settle()["settled"], 0)
+        self.exchange.history_ready = True
+        closing = self.exchange.fills.pop(2)                        # the closing fill is not booked yet
+        self.assertEqual(self.settle()["net_pnl"], estimate["net_pnl"])
+        self.exchange.fills[2] = closing
+        self.assertEqual(self.settle()["settled"], 1)
+
+    def test_fills_of_partial_exit_and_exchange_stop_are_all_counted(self):
+        self.enter()
+        self.exchange.price[SYM] = 104.0
+        self.engine._tick()                                         # half off at 2R
+        self.engine._tick()                                         # stop resized
+        (stop,) = self.exchange.live_stops(SYM)
+        self.exchange.trigger_stop(stop["clientAlgoId"], 100.5)     # the rest leaves via the exchange stop
+        self.engine._tick()
+        trade = self.settle()
+        self.assertEqual(trade["settled"], 1)
+        self.assertEqual(sorted(strategy_ids(trade)), [1, 2, 777])
+        self.assertAlmostEqual(trade["gross_pnl"], QTY / 2 * 4.0 + QTY / 2 * 0.5, places=6)
+        self.assertAlmostEqual(trade["fees"], (QTY * 100 + QTY / 2 * 104.0 + QTY / 2 * 100.5) * 0.0004, places=6)
+
+    def test_commission_paid_in_another_asset_keeps_the_fee_estimate(self):
+        self.exchange.fee_asset = "BNB"
+        estimate = self.stopped_out_trade()
+        trade = self.settle()
+        self.assertEqual(trade["settled"], 2)
+        self.assertEqual(trade["fees"], estimate["fees"])
+        self.assertAlmostEqual(trade["gross_pnl"], -2.1 * QTY, places=6)
+
     # ---------------- cases ----------------
 
     def scan_with(self, firing):
@@ -262,6 +329,11 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.engine.positions, {})
         self.engine._execute_entry(SYM, LONG)            # but opens nothing new
         self.assertEqual(len(self.exchange.sent), 2)
+
+
+def strategy_ids(trade):
+    import json
+    return json.loads(trade["order_ids"])
 
 
 if __name__ == "__main__":
