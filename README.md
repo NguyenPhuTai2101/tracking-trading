@@ -1,221 +1,212 @@
-# Binance Demo Trading Hub & Học Viện Giao Dịch (Spot & Futures)
+# Trading Bot: quản lý vốn + giao dịch tự động (Binance Futures Demo)
 
-Hệ thống Web App toàn diện kết hợp giữa **Học viện hướng dẫn Trading thực chiến** và **Trading Bot tự động 2 chiều (Long/Short)** kết nối trực tiếp với sàn **Binance Demo (Mock Trading)**.
+Bot USDT-M Futures chạy trên **Binance Demo**. Nguyên tắc thiết kế: **mô hình vốn quyết định, chiến lược
+chỉ đề xuất**. Chiến lược đưa ra hướng và điểm cắt lỗ; mô hình vốn quyết định có vào lệnh không và vào bao nhiêu.
 
----
+> Đây là công cụ thử nghiệm trên tài khoản Demo, không phải lời khuyên đầu tư. Nghiên cứu trên 3 năm dữ liệu
+> cho thấy cả chiến lược mặc định lẫn ứng viên thay thế đều **không có lợi thế sau phí khi kiểm tra ngoài mẫu**
+> (xem [Nghiên cứu tín hiệu](#nghiên-cứu-tín-hiệu)). Đừng dùng tiền thật.
 
-## 🌟 Tính Năng Mới & Toàn Diện
+## Cấu trúc
 
-### 1. 🪙 Hỗ Trợ 500+ Đồng Coin (Tìm Kiếm & Đổi Coin Tức Thì)
-* **Dải nút chọn nhanh HOT Coins:** Chuyển đổi 1-click giữa các coin hot nhất: **BTC, ETH, SOL, BNB, SUI, NEAR, PEPE, DOGE, XRP, AVAX, LINK, ADA, APT...**
-* **Bộ tìm kiếm 500+ Cặp tiền Binance Demo:** Cho phép tìm theo tên hoặc lọc theo danh mục: **Layer 1, DeFi, Meme Coins, AI & Web3**.
-* **Đồng bộ toàn diện khi đổi coin:**
-  * Biểu đồ nến TradingView cập nhật ngay cấu trúc nến của coin đó.
-  * Máy tính tín hiệu AI (RSI, EMA, MACD, Bollinger Bands) tính toán lại riêng cho coin đó.
-  * Danh sách quét của bot được lưu riêng trong bảng cấu hình Bot Auto.
-  * Bảng đặt lệnh tay chuyển sang coin đó.
+```
+dữ liệu nến ─► strategy.py ─► risk.py ─► engine.py ─► binance_client.py
+               (tín hiệu)    (duyệt +     (khớp lệnh,   (lớp sàn)
+                              khối lượng)  SL trên sàn)
+                                  │
+backtest.py dùng chung strategy.py và risk.py      journal.py (SQLite) ─► metrics.py ─► giao diện
+```
 
-### 2. ⚡ Giao Dịch Phái Sinh Futures (Đòn Bẩy 2 Chiều)
-* **Kết nối trực tiếp Binance Futures Demo:** `https://demo-fapi.binance.com`
-* **Số dư ví Futures độc lập:** Tích hợp ví ký quỹ **5,000 USDT & 5,000 USDC** của Binance Futures.
-* **Tùy chỉnh Đòn bẩy (Leverage):** Hỗ trợ chuyển đổi nhanh **2x, 5x, 10x, 20x, 50x** chỉ bằng 1 cú click.
-* **Bot Tự Động 2 Chiều (2-Way Trading):**
-  * Tín hiệu thị trường TĂNG (RSI quá bán hoặc EMA Golden Cross) $\rightarrow$ Bot tự động mở vị thế **LONG**.
-  * Tín hiệu thị trường GIẢM (RSI quá mua hoặc EMA Death Cross) $\rightarrow$ Bot tự động mở vị thế **SHORT** (Kiếm tiền ngay cả khi thị trường downtrend sập giá).
-* **Quản trị rủi ro Futures:** TP/SL theo % ROE, giới hạn vốn và lỗ dự kiến; SL trên sàn dùng STOP_MARKET reduceOnly. Các cơ chế này không bảo đảm tránh thanh lý hoặc trượt giá.
-* **Đặt lệnh tay 2 chiều:** Hỗ trợ nút **MỞ LONG** và **MỞ SHORT** trực tiếp lên sàn Binance Futures Demo.
+| File | Vai trò |
+|---|---|
+| `strategy.py` | Xu hướng 4h, tín hiệu pullback 1h, kế hoạch thoát lệnh. Hàm thuần, không gọi mạng |
+| `risk.py` | Tính khối lượng theo rủi ro, trần danh mục, ngắt mạch, thang drawdown |
+| `engine.py` | Vòng lặp bot, ghi lệnh trước khi gửi, đối soát, SL trên sàn |
+| `backtest.py` | Mô phỏng danh mục với đúng `strategy.py` + `risk.py`, có phí, trượt giá, funding |
+| `research.py` | Nghiên cứu tín hiệu trên 3 năm dữ liệu, tách train/test |
+| `journal.py` | SQLite `trading.db`: trạng thái bot, lệnh đã đóng, đường vốn, nhật ký |
+| `binance_client.py` | REST Binance Demo: lệnh, lệnh điều kiện (algo), vị thế, nến |
+| `main.py`, `static/` | API FastAPI và giao diện một trang |
 
-### 3. 🟢 Giao Dịch Giao Ngay Spot (Truyền Thống)
-* **Kết nối Binance Spot Demo:** `https://demo-api.binance.com`
-* Mua thấp bán cao, không đòn bẩy, an toàn tích sản.
+## Mô hình quản lý vốn
 
-### 4. 📚 Học Viện Trading Thực Chiến (Academy)
-* **Bài 1:** Khái niệm cốt lõi (Spot vs Futures, Market vs Limit, TP / SL).
-* **Bài 2:** Nghệ thuật đọc nến Nhật (Hammer, Bullish Engulfing, Shooting Star, Hỗ trợ & Kháng cự).
-* **Bài 3:** Làm chủ 4 chỉ báo kỹ thuật (RSI, EMA, MACD, Bollinger Bands).
-* **Bài 4:** Quản trị vốn sống còn (Quy tắc 1-2%, Tỷ lệ R:R >= 1:2) kèm **Máy tính Position Size Calculator**.
-* **Bài 5:** Tâm lý giao dịch và cách ứng dụng Bot để giữ kỷ luật 100%.
-* **Bài 6:** Bí kíp đánh Futures & Đòn bẩy (Cách tính ROE, Quy tắc tránh cháy tài khoản).
-* **Bài 7:** Luật sàn Binance cốt lõi: Min Notional, Lot Size/Step Size, Phí Funding Rate, Mark Price & Bảng mã lỗi.
+Mọi giới hạn tính theo **% vốn tài khoản** (số dư + lãi/lỗ chưa chốt) và **không tắt được**; chỉ chỉnh trong
+khoảng cho phép ở tab Thiết lập.
 
----
+| Lớp | Mặc định | Ý nghĩa |
+|---|---|---|
+| Rủi ro mỗi lệnh | 0,75% vốn | Chạm SL thì mất chừng này, đã gồm phí + trượt giá ước tính (= 1R) |
+| Khối lượng | tự tính | `rủi ro / (khoảng cách SL + chi phí khứ hồi)`. Đòn bẩy (5x) chỉ quyết định ký quỹ |
+| Tổng rủi ro đang mở | 3% vốn | Nếu mọi SL cùng bị chạm. SL đã dời qua giá vào thì tính rủi ro = 0 |
+| Số vị thế / cùng chiều | 4 / 3 | Các coin đi cùng nhau nên các lệnh cùng chiều gần như một lệnh lớn |
+| Giá trị vị thế | 100% vốn mỗi lệnh, 300% tổng | Các trần này chỉ làm lệnh nhỏ đi |
+| Lọc chi phí | 0,15R | Bỏ lệnh nếu phí + trượt giá khứ hồi lớn hơn 0,15R (SL quá sát) |
+| Ngắt mạch ngày / tuần | −2% / −5% | Nghỉ mở lệnh tới 00:00 UTC / thứ Hai. Vị thế đang mở vẫn giữ SL |
+| Chuỗi thua | 4 lệnh | Nghỉ tới hôm sau |
+| Thang drawdown | −10% / −20% từ đỉnh | −10%: rủi ro mỗi lệnh giảm một nửa. −20%: bot dừng, chờ bạn bấm xác nhận |
 
-## 🚀 Hướng Dẫn Sử Dụng
+## Chiến lược: pullback thuận xu hướng
 
-Web App đang hoạt động tại địa chỉ:
-👉 **`http://127.0.0.1:8000`**
+1. **Xu hướng (4h):** giá so với EMA200, độ dốc EMA200 và ADX ≥ 20 cho ra TĂNG / GIẢM / ĐI NGANG.
+   Đi ngang thì đứng ngoài. Altcoin không đánh ngược xu hướng của BTC.
+2. **Thiết lập (1h):** EMA20/EMA50 cùng chiều xu hướng, giá hồi về EMA20 và RSI nguội lại.
+3. **Kích hoạt:** nến 1h đóng theo chiều xu hướng, vượt đỉnh/đáy nến trước, chưa chạy quá 1 ATR khỏi EMA20.
+   Vào lệnh ở giá mở nến kế tiếp.
+4. **Cắt lỗ:** ngoài đáy/đỉnh của nhịp hồi, tối thiểu 1,5 ATR. Xa hơn 3 ATR thì bỏ lệnh.
+5. **Thoát:** đạt 1R dời SL về hòa vốn (cộng phí); đạt 2R chốt 50%; phần còn lại trailing 3 ATR sau giá
+   tốt nhất; sau 24 nến chưa đạt 0,5R thì đóng.
 
-### Khởi động lại ứng dụng:
+## Chạy ứng dụng
+
+```bash
+python -m pip install -r requirements.txt
+```
+
 ```bash
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-### Cấu hình Binance Demo
+Mở `http://127.0.0.1:8000`. Khóa Demo đặt trong `.env` cạnh mã nguồn:
 
-Ứng dụng đọc `BINANCE_API_KEY` và `BINANCE_SECRET_KEY` từ `.env` cạnh mã nguồn.
-Biến môi trường của tiến trình có ưu tiên cao hơn `.env`. Khởi động lại sau khi đổi khóa.
-Phần dữ liệu thị trường vẫn dùng được khi chưa cấu hình khóa. Chạy một worker
-và giữ ứng dụng trên localhost nếu chưa có lớp xác thực phía trước.
-
-Hai bot lưu mã lệnh vào `bot_state_spot.json` và `bot_state_futures.json` trước khi gửi. Nếu mất phản hồi, bot
-tra cứu lệnh theo mã và tạm ngừng mở vị thế mới. Khi khởi động lại, bot
-đọc các lệnh chờ từ file và tiếp tục đối soát. Mã lệnh có trong
-`pending_orders` của `/api/bot/status?market=SPOT` hoặc `?market=FUTURES`. Nếu Binance vẫn không xác nhận được
-lệnh, hãy kiểm tra mã trên Binance Demo trước khi xử lý thủ công.
-Bot Futures hỗ trợ chế độ One-way và kiểm tra các vị thế trên sàn trước khi mở mới.
-Bot không tự đổi chế độ tài khoản.
-
-### Điều khiển bot sau nâng cấp
-
-- Bot SPOT và bot FUTURES có cấu hình, vị thế, lệnh chờ, PnL, nhật ký và worker riêng.
-  Có thể chạy một hoặc cả hai. Dừng/đóng toàn bộ chỉ tác động bot đang chọn.
-  Spot cố định 1x, Futures có đòn bẩy riêng. Trần vốn và lỗ tại SL áp dụng riêng từng bot.
-- Chọn **Thiết lập** trên thẻ bot để chỉnh vốn mỗi lệnh, chiến lược, khung nến,
-  watchlist, TP/SL, số vị thế và giới hạn rủi ro. Bản nháp chưa lưu được giữ riêng
-  khi chuyển bot trong trang; cần Lưu trước khi chạy. Tải lại trang sẽ bỏ bản nháp.
-- Thị trường và khung nến ở biểu đồ phục vụ việc xem dữ liệu và đặt lệnh tay.
-  Việc đổi biểu đồ không đổi bot đang xem hoặc cấu hình hai bot.
-- Dừng mở lệnh mới vẫn giữ giám sát TP/SL và đối soát lệnh chờ.
-  Khởi động ứng dụng sẽ khôi phục giám sát vị thế đã lưu, nhưng không tự bật mở mới.
-- Đóng tất cả dừng mở mới, hủy lệnh bot còn chờ và tiếp tục xử lý vị thế còn lại.
-  Nếu Binance chưa xác nhận, trạng thái hiển thị đang xử lý.
-- Mỗi bot có thị trường cố định. Chỉ đổi đòn bẩy Futures khi hết vị thế và lệnh chờ. Các thay đổi cấu hình
-  yêu cầu tạm dừng mở mới. Lệnh tay không được can thiệp mã bot đang quản lý.
-- Bot bỏ qua lệnh nếu không đủ mức tối thiểu của sàn, số dư không đủ,
-  hoặc vượt trần tổng vốn/tổng lỗ dự kiến tại SL. Không tự nâng vốn.
-  Khi nâng cấp dữ liệu cũ, trần vốn ban đầu = vốn mỗi lệnh × số vị thế tối đa,
-  trần lỗ tại SL = trần vốn × SL %. Người dùng có thể điều chỉnh trong bảng bot.
-- Giới hạn SL là ngưỡng dự kiến theo giá; khớp MARKET có thể trượt giá.
-  Lệch giá quá 1% giữa tín hiệu và kiểm tra trước gửi sẽ khiến bot bỏ qua lệnh.
-- PnL và win rate hiện tính trước commission và funding. Gợi ý ATR trên biểu đồ
-  khác với TP/SL theo % đã cấu hình cho bot.
-- Mỗi phần khớp Futures được gắn một STOP_MARKET reduceOnly theo Mark Price trên sàn.
-  Lệnh đã được Binance xác nhận tiếp tục tồn tại khi ứng dụng tắt. Có một khoảng
-  thời gian từ khi khớp entry đến khi sàn xác nhận SL; lỗi xác định khi đặt SL
-  khiến bot dừng mở mới và yêu cầu đóng vị thế. Phản hồi không rõ được đối soát,
-  không gửi trùng. Khi đóng bằng ứng dụng, bot xác nhận hủy/khớp SL trước khi đóng.
-  Trạng thái và mã SL nằm trong `protective_orders` của `/api/bot/status?market=FUTURES`.
-- TP Futures và TP/SL Spot vẫn cần ứng dụng chạy và kết nối. SL trên sàn chỉ dành
-  cho vị thế bot quản lý, không tự bảo vệ các lệnh tay.
-- Vị thế bị thay đổi bên ngoài sẽ chặn mở mới. Trường hợp giảm/đóng thủ công
-  cần đối soát lịch sử; bot không tự suy đoán giá đóng hoặc PnL.
-- Chạy một worker. Ứng dụng khóa file trạng thái để tránh hai tiến trình cùng
-  giao dịch. Đường dẫn .env và các file trạng thái được xác định theo thư mục mã nguồn.
-
-Lần đầu nâng cấp từ một bot, ứng dụng chuyển cấu hình hiện có sang bot đúng thị trường,
-giữ nguyên vị thế, mã lệnh chờ, SL và lịch sử đã lưu. Bot còn lại nhận cấu hình mặc định.
-`bot_state.json` cũ được giữ làm bản sao; những lần chạy sau đọc hai file riêng,
-không ghi đè lại cấu hình đã tách. Cả hai bot khởi động ở chế độ giám sát, chờ người dùng bật mở lệnh.
-Nếu lịch sử cũ đã trộn hai thị trường, tổng PnL cũ được giữ ở bot sở hữu cấu hình cũ
-và gắn nhãn `legacy_combined`; không suy đoán lại số thắng/thua từ các phần khớp còn lưu.
-
-API trạng thái tổng: `GET /api/bots/status`. Các API `/api/bot/status`, `/start`,
-`/stop`, `/config`, `/close-position`, `/close-all` bắt buộc query `market=SPOT`
-hoặc `market=FUTURES` để tránh thao tác nhầm bot. Ví dụ:
-`POST /api/bot/stop?market=SPOT` không dừng bot Futures.
-
-### Đăng nhập
-
-Đặt `APP_USERNAME` và `APP_PASSWORD` để bật trang đăng nhập (`/login`). Mọi trang và
-API (trừ `/healthz`) đều cần phiên đăng nhập; cookie `HttpOnly`, `SameSite=Strict`,
-giữ 7 ngày. Sai 5 lần liên tiếp bị khóa 5 phút theo IP. Đổi mật khẩu sẽ đăng xuất mọi
-trình duyệt (hoặc đặt `SESSION_SECRET` riêng để tách khóa phiên khỏi mật khẩu).
-
-Trên Railway (hoặc khi đặt `REQUIRE_AUTH=1`) mà thiếu hai biến trên, ứng dụng trả 503
-cho mọi yêu cầu thay vì mở công khai. Chạy local không đặt biến thì không cần đăng nhập.
-
-### Bot tự chạy lại và lý do dừng
-
-Bot nhớ trạng thái "đang chạy" trong file trạng thái. Sau khi máy chủ khởi động lại
-(redeploy, crash) bot tự chạy lại với đúng các bước kiểm tra như bấm CHẠY (đối soát
-lệnh, SL trên sàn, vị thế), thử lại mỗi 30 giây tối đa 10 lần. Bấm DỪNG hoặc "Đóng tất
-cả" thì không tự chạy lại. Mỗi lần bot dừng, lý do và thời điểm được lưu và hiện dưới
-trạng thái bot; 100 dòng log gần nhất cũng được giữ qua lần khởi động lại.
-
-Đặt SL trên sàn bị từ chối một lần (thường do giá đã vượt SL khi SL quá sát): bot đóng
-vị thế đó và tạm chặn mở mới cho tới khi đóng xong. Bị từ chối 2 lần trong 1 giờ, hoặc
-lệnh SL trên sàn sai thông số, thì bot dừng hẳn và ghi lý do.
-
-### Vào & chốt lệnh
-
-| Tùy chọn | Ý nghĩa |
-|---|---|
-| Kiểu TP/SL `ROE` | TP/SL theo % ký quỹ (cũ): đòn bẩy càng cao khoảng cách giá càng hẹp |
-| Kiểu TP/SL `ATR` | SL = hệ số × ATR, TP = hệ số × ATR của nến tín hiệu, không phụ thuộc đòn bẩy. Bỏ lệnh nếu SL gần giá thanh lý |
-| Lọc EMA200 | Chỉ LONG khi giá trên EMA200, chỉ SHORT khi dưới (cùng khung nến, bot tải 261 nến) |
-| Nghỉ sau khi thoát | Bỏ qua tín hiệu của N nến tính từ nến thoát lệnh trên cùng mã |
-| Dời SL hòa vốn | Khi lãi N×R, bot tự đóng nếu giá quay về giá vào + phí; SL trên sàn giữ nguyên làm lưới an toàn |
-
-### Quản trị rủi ro (0 = tắt, mặc định tắt)
-
-| Tùy chọn | Ý nghĩa |
-|---|---|
-| Lỗ tối đa mỗi lệnh tại SL | Bot tính ký quỹ theo khoảng cách SL (đã cộng phí khứ hồi ước tính) để mỗi lệnh chạm SL lỗ gần bằng số này. "Vốn mỗi lệnh" trở thành trần ký quỹ. Lệnh dưới mức tối thiểu của sàn bị bỏ, không tự nâng vốn |
-| Nghỉ khi lỗ trong ngày đạt | Khi kết quả đã chốt trong ngày (trừ phí ước tính) chạm mức này, bot ngừng mở lệnh mới đến ngày hôm sau theo giờ máy chủ. Vị thế đang mở vẫn được giám sát |
-| Nghỉ sau số lệnh thua liên tiếp | Tương tự, theo chuỗi thua trong ngày; một lệnh thắng đặt lại chuỗi |
-
-Các giới hạn này chỉ chặn mở lệnh mới; khớp MARKET vẫn có thể trượt giá nên lỗ thực có thể lớn hơn dự kiến.
-Cơ sở và nguồn tham khảo nằm ở Bài 8 trong tab Học viện.
-
-Nút **Cấu hình khuyến nghị** (bot Futures): RSI_SCALPING, khung 1h, 3x, ATR 1.5/3, lọc EMA200,
-nghỉ 2 nến. Đây là tổ hợp có drawdown thấp nhất trong các backtest đã chạy, chưa phải lợi thế
-đã được chứng minh; kiểm tra lại ở tab Backtest trước khi dùng.
-
-### Dashboard
-
-Tab **Dashboard** tổng hợp các lệnh bot đã đóng (API `GET /api/dashboard?market=ALL|SPOT|FUTURES&days=30`,
-`days=0` là toàn bộ lịch sử đã lưu). Lọc theo bot và 7/30/90 ngày; tự làm mới mỗi 10 giây khi đang mở.
-
-- Số liệu tính **sau phí taker ước tính** (0.1% giá trị lệnh khứ hồi với Futures, 0.2% với Spot), chưa gồm
-  funding, nên có thể lệch với PnL trước phí ở tab Lịch sử và với số thực trên Binance.
-- Các lần khớp đóng từng phần của cùng một vị thế được gộp thành một lệnh khi tính tỷ lệ thắng, profit factor
-  và kỳ vọng. Vị thế mới đóng một phần chưa được tính thắng/thua.
-- "Hôm nay & giới hạn rủi ro" cho biết bot đã dùng bao nhiêu so với giới hạn lỗ ngày, chuỗi thua, trần ký quỹ
-  và trần lỗ tại SL.
-- Bot lưu 500 lần khớp đóng gần nhất (trước đây chỉ 50 lần sau khi khởi động lại); lịch sử cũ hơn không có.
-- Dưới 30 lệnh trong giai đoạn đang xem, dashboard nhắc rằng các tỷ lệ chưa có ý nghĩa thống kê.
-
-### Backtest có tính phí
-
-Tab **Backtest** trên web, hoặc dòng lệnh:
-
-```powershell
-python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT --days 90 --strategy HYBRID_SMART RSI_SCALPING EMA_CROSSOVER
-python backtest.py --interval 1h --days 180 --leverage 3 --tp 12 --sl 6 --cooldown 2
+```
+BINANCE_API_KEY=...
+BINANCE_SECRET_KEY=...
 ```
 
-Dùng đúng logic tín hiệu của bot (`strategy.py`), TP/SL theo % ROE, trần vị thế/ký quỹ/rủi ro.
-Vào lệnh ở giá mở nến kế tiếp (bỏ qua nếu lệch >1%), phí taker mặc định 0.05% (Futures)
-/ 0.1% (Spot) mỗi chiều cộng trượt giá. Nến chạm cả TP và SL tính là SL. Chưa mô phỏng
-funding, thanh lý và làm tròn khối lượng. Dữ liệu nến lấy từ API công khai của Binance
-(`--source demo` để dùng sàn Demo), không gửi khóa API.
+- Chạy **một worker**. Ứng dụng khóa file `trading.db.lock` để hai tiến trình không cùng giao dịch.
+- `STATE_DIR` đổi nơi lưu `trading.db` (ví dụ volume trên Railway).
+- `APP_USERNAME` + `APP_PASSWORD` bật trang đăng nhập. Trên Railway (hoặc `REQUIRE_AUTH=1`) mà thiếu hai
+  biến này thì ứng dụng trả 503 thay vì mở công khai.
+- Tài khoản Futures phải ở chế độ **One-way**. Bot không tự đổi chế độ.
 
-Kết quả kèm bảng **Kiểm tra độ ổn định**: cùng cấu hình trên 70% đầu và 30% cuối của giai đoạn
-(chia theo thời điểm vào lệnh) và mức "Mua & giữ" cùng giai đoạn. Chỉ chỉnh tham số dựa trên phần đầu;
-cấu hình chỉ lãi ở một phần, hoặc có dưới 30 lệnh, sẽ được cảnh báo. Các tùy chọn rủi ro dùng được ở
-dòng lệnh: `--risk 1 --daily-loss 3 --max-losses 3`.
+### Bốn tab
 
-### Kiểm tra hồi quy
+- **Tổng quan:** vốn, lãi/lỗ ngày và tuần, drawdown, mức sử dụng từng giới hạn rủi ro, vị thế đang mở, bảng
+  quét (vì sao mỗi mã có hay chưa có tín hiệu), nhật ký.
+- **Hiệu suất:** lệnh đã đóng tính theo R và USDT sau phí ước tính, đường vốn lấy từ số dư thật.
+- **Thiết lập:** tham số vốn, ngắt mạch, chiến lược, danh mục. Phải dừng bot trước khi lưu.
+- **Backtest:** chạy thử các giá trị đang hiện ở tab Thiết lập (kể cả chưa lưu).
 
-```powershell
+### Hành vi an toàn của engine
+
+- Mỗi lệnh được ghi vào `trading.db` **trước khi gửi**. Kết quả không rõ thì tra cứu theo mã lệnh, không gửi lại.
+- Mỗi vị thế có một lệnh STOP_MARKET reduce-only theo Mark Price **trên sàn**, nên SL vẫn còn khi ứng dụng tắt.
+  Khi kế hoạch dời SL (hòa vốn, trailing) hoặc sau khi chốt một phần, bot hủy lệnh SL cũ và đặt lại ở mức mới;
+  trong lúc đó vòng giám sát 2 giây tự thực thi SL.
+- Chốt một phần, hòa vốn, trailing và time stop **cần ứng dụng đang chạy**. Khi ứng dụng tắt chỉ còn SL trên
+  sàn ở mức đã đặt gần nhất.
+- Đặt SL trên sàn thất bại: đóng vị thế đó. Thất bại 2 lần trong 1 giờ: bot dừng.
+- Vị thế trên sàn mà bot không biết sẽ **chặn mở lệnh mới**. Bảng điều khiển có nút đóng riêng các vị thế đó;
+  "Đóng tất cả" chỉ đóng vị thế của bot.
+- "Dừng mở lệnh" vẫn tiếp tục quản lý SL của vị thế đang mở. Bot đang chạy sẽ tự chạy lại sau khi máy chủ
+  khởi động lại (thử tối đa 10 lần, mỗi 30 giây).
+
+## Backtest
+
+Trên giao diện (tab Backtest) hoặc dòng lệnh:
+
+```bash
+python backtest.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --days 180 --robust
+```
+
+Mô phỏng: vào ở giá mở nến kế tiếp cộng trượt giá (bỏ nếu lệch quá 1%), phí taker mỗi lần khớp, funding lịch
+sử, nến chạm cả SL và mục tiêu tính là SL, gap qua SL khớp ở giá mở. Chưa mô phỏng thanh lý, làm tròn khối
+lượng và độ sâu sổ lệnh. Dữ liệu nến lấy từ API công khai của Binance, không gửi khóa API.
+
+Báo cáo gồm kết quả ở **70% đầu và 30% cuối** giai đoạn, mức **mua & giữ**, số tín hiệu bị mô hình vốn chặn, và
+(tùy chọn) **độ nhạy tham số**. Chỉ chỉnh tham số dựa trên 70% đầu; cấu hình chỉ lãi ở một phần, hoặc chỉ lãi
+ở đúng một giá trị tham số, nhiều khả năng là khớp nhiễu.
+
+### Kết quả backtest của cấu hình mặc định
+
+10 mã mặc định, 365 ngày tới 16/11/2026, vốn 1.000 USDT: 386 lệnh, thắng 29,3%, kỳ vọng −0,01R, lợi nhuận
++4,2%, drawdown tối đa 20,2% (chạm mức dừng). Mua & giữ cùng giai đoạn: −50,7%. Mô hình vốn làm đúng việc
+(mỗi lần cắt lỗ ≈ −1R, drawdown dừng ở ngưỡng đã đặt), nhưng điểm vào lệnh không tạo ra lợi thế.
+
+## Nghiên cứu tín hiệu
+
+`research.py` chạy đúng bộ backtest của project trên 3 năm dữ liệu (17/11/2023 → 16/11/2026, 10 mã), gỡ các
+trần và ngắt mạch của mô hình vốn để đo riêng tín hiệu: R mỗi lệnh sau phí, trượt giá và funding.
+
+```bash
+python research.py fetch
+```
+
+```bash
+python research.py train
+```
+
+```bash
+python research.py test
+```
+
+Kỷ luật: dò tìm thoải mái trên **70% đầu** (train, tới 22/12/2025); chọn trước **một** ứng viên rồi mới chạy
+**30% cuối** (test). Mỗi lần nhìn vào test là một lần "tiêu" nó.
+
+### Trên train (11/2023 – 12/2025)
+
+| Quy tắc | Lệnh | Kỳ vọng | t | Nửa đầu / nửa sau |
+|---|---|---|---|---|
+| Pullback 1h mặc định | 1.646 | −0,055R | −1,9 | −0,011R / −0,100R |
+| Pullback 1h, bỏ hòa vốn + chốt một phần | 1.597 | −0,039R | −1,1 | +0,009R / −0,088R |
+| Đối chứng: theo xu hướng 4h, **không setup** | 4.166 | +0,010R | +0,4 | −0,003R / +0,023R |
+| Breakout 24 / 96 nến 1h, lọc xu hướng 4h | 1.970 / 1.192 | −0,045R / −0,018R | −1,2 / −0,4 | |
+| Breakout 40 nến 4h, SL 2 ATR, trailing 4 ATR, không lọc | 861 | +0,159R | +2,4 | +0,231R / +0,085R |
+
+- **Setup pullback không thêm gì**: nó kém hơn cả việc vào lệnh theo xu hướng mà không cần setup. Đổi cách
+  thoát lệnh cũng không cứu được.
+- **Breakout 4h trông có triển vọng**: cả 24 ô trong lưới (N 20/40/80 × SL 2/3 ATR × trailing 3–6 ATR) đều
+  dương, t từ 0,8 đến 2,6. Nhưng 10 lệnh lớn nhất (một lệnh XRP +97R cuối 2024) chiếm 226 trên 243R ở ô
+  trailing 5 ATR, và lệnh SHORT âm (−0,10R).
+
+Ứng viên chọn trước cho test: **breakout 40 nến 4h, SL 2 ATR, trailing 4 ATR, cả hai chiều, không lọc** (ô
+giữa của vùng dương, không phải ô tốt nhất).
+
+### Trên test (12/2025 – 11/2026), chạy một lần
+
+| Quy tắc | Lệnh | Kỳ vọng | t |
+|---|---|---|---|
+| Ứng viên breakout 4h | 369 | −0,003R | −0,03 |
+| Pullback 1h mặc định | 641 | +0,001R | +0,02 |
+
+Qua mô hình vốn thật: ứng viên −0,7% (drawdown 18,6%), pullback mặc định +5,7% (drawdown 20,2%, bị dừng).
+
+Cùng lần chạy đó cũng in ra, chỉ để tham khảo chứ không dùng để chọn: 16/24 ô của lưới breakout dương trên
+test nhưng không ô nào có |t| ≥ 2; mẫu đối chứng "theo xu hướng, không setup" khung 1h đạt +0,093R (t = 2,1)
+trên test trong khi chỉ +0,010R trên train, tức là không nhất quán giữa hai giai đoạn.
+
+### Kết luận
+
+- Lợi thế của breakout 4h trên train **không lặp lại ngoài mẫu**. Nó đến từ vài con sóng lớn của năm 2024,
+  không phải từ quy tắc. Vì vậy chiến lược mặc định **không được đổi** sang breakout.
+- Chưa có quy tắc giá đơn giản nào (pullback, breakout, 1h hay 4h) cho thấy lợi thế sau phí trên 10 coin này.
+- Phí ăn khoảng 0,05R mỗi lệnh ở khung 1h và 0,02–0,03R ở khung 4h. Khung chậm rẻ hơn nhưng chưa đủ.
+- Giai đoạn test đã bị nhìn một lần. Ý tưởng mới cần dữ liệu mới (thêm coin, thêm lịch sử, hoặc chờ thời gian
+  trôi) thì kiểm tra ngoài mẫu mới còn ý nghĩa.
+
+## Kiểm thử
+
+```bash
 python -m pip install -r requirements-dev.txt
-python -m unittest -v test_trading_upgrade test_bot_isolation test_backtest_auth test_entry_exit test_risk_controls test_dashboard
 ```
 
-Bộ test dùng API giả lập và chặn kết nối mạng ngoài ý muốn. Kiểm tra API Demo
-trực tiếp có thể dùng endpoint /order/test để xác nhận yêu cầu, không chứng minh
-được hành vi khớp lệnh hoặc TP/SL khi thị trường biến động.
-
-Kiểm tra kết nối bằng khóa `.env` (không in khóa hoặc chữ ký):
-
-```powershell
-python demo_smoke_test.py
+```bash
+python -m unittest discover -s tests -t .
 ```
 
-Khi ứng dụng đã tắt, bot và tài khoản Futures không có vị thế/lệnh bot chờ,
-có thể kiểm tra vòng đời SL Demo bằng `python demo_smoke_test.py --probe-stop`.
-Script tạo một STOP_MARKET reduceOnly cách xa giá hiện tại, truy vấn và hủy
-đúng mã của probe; không mở vị thế. Journal `demo_stop_probe.json` được giữ nếu
-chưa xác nhận hủy để lần chạy sau tiếp tục đối soát. API có thể trả dữ liệu chậm
-sau khi tạo/hủy, vì vậy script đợi xác nhận thay vì coi phản hồi đầu tiên là kết quả cuối.
-Triển khai theo [tài liệu Algo Order của Binance](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order).
+Bộ test dùng sàn giả lập trong bộ nhớ (`tests/helpers.py`), không gọi mạng và không đụng tới `trading.db` thật.
+
+Kiểm tra kết nối bằng khóa trong `.env` (không in khóa): `python demo_smoke_test.py`. Khi ứng dụng đã tắt và
+tài khoản Demo không có vị thế hay lệnh chờ, `python demo_smoke_test.py --probe-stop` tạo rồi hủy một lệnh
+STOP_MARKET reduce-only ở xa giá để kiểm tra vòng đời lệnh SL; không mở vị thế.
+
+## Giới hạn đã biết
+
+- Lãi/lỗ từng lệnh dùng **phí ước tính** (taker 0,05% mỗi chiều) và chưa gồm funding. Đường vốn thì lấy từ số
+  dư thật nên đã gồm cả hai.
+- Luồng chốt một phần gửi lệnh reduce-only khi lệnh SL cũ còn trên sàn, rồi mới thay SL. Luồng này đã được
+  kiểm thử với sàn giả lập, **chưa được xác nhận trên Binance Demo thật**; nếu sàn từ chối, bot bỏ qua bước
+  chốt một phần và tiếp tục trailing.
+- Ngày/tuần của ngắt mạch tính theo UTC. Nạp/rút tiền làm lệch các mốc vốn; drawdown tính lại từ hôm bạn bấm
+  xác nhận.
+- Dữ liệu của bản cũ (`bot_state*.json`) không được chuyển sang. Vị thế do bản cũ mở sẽ hiện là "vị thế ngoài bot".
